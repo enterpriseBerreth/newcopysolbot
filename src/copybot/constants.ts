@@ -42,7 +42,7 @@ export const DEX_PROGRAMS = new Set<string>([
   "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX",
 ]);
 
-/** Wallets we start with (set TRACKED_WALLETS to override). */
+/** Wallets we start with (set TRACKED_WALLETS to override). Deduped. */
 export const DEFAULT_WALLETS = [
   "9BMzTpSo4URse1oN666pmexhdjpU1vA5p7LtroCFQdLU",
   "3bzaJd5yZG73EVDz8xosQb7gfZm2LN5auFGh6wnP1n1f",
@@ -54,4 +54,10 @@ export const DEFAULT_WALLETS = [
   "BvApEL9H3nnn2mezyUQQsSxvnwwBpkVFF3Yh61MZSruZ",
   "3VUNtVtjjx5ckUojT7UocJ5fbuAJRsNUXNfTBnPte9vC",
   "EeXvxkcGqMDZeTaVeawzxm9mbzZwqDUMmfG3bF7uzumH",
+  "DkjBeKvadAtE3d8ZBvhp1AhmqBdzTM6URUUXgKKjGeQQ",
+  "AimUs5AnmPfyCzDdUhvz4BTvb2fGsNonAb8uuSyHByw9",
+  "CHCLtC1AWpSshZkiU8TNoNn9r7CHecVhTakuao7u4aBX",
+  "4b3ZctHLzPBQt3biFbDWp12hf6ADkaruQx4aj9kiDQKh",
+  "9LXWa7V3AE15VfBupcx5gDts2ix3Y9NzbcKZKjkkq6hV",
+  "GeUnv1jmtviRbR7Gu1JnXSGkUMUgFVBHuEVQVpTaUX1W",
 ].join(",");

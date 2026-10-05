@@ -22,10 +22,14 @@ export const config = {
   pollIntervalMs: num("POLL_INTERVAL_MS", 15000),
   enabled: bool("COPYBOT_ENABLED", true),
 
-  trackedWallets: str("TRACKED_WALLETS", DEFAULT_WALLETS)
-    .split(",")
-    .map((w) => w.trim())
-    .filter(Boolean),
+  trackedWallets: [
+    ...new Set(
+      str("TRACKED_WALLETS", DEFAULT_WALLETS)
+        .split(",")
+        .map((w) => w.trim())
+        .filter(Boolean),
+    ),
+  ],
 
   // Copy sizing: our entry = CLIP_PCT% of the copied wallet's trade notional.
   clipPct: num("CLIP_PCT", 1),
@@ -34,7 +38,9 @@ export const config = {
 
   // Paper account.
   startingBudgetUsd: num("STARTING_BUDGET_USD", 10_000),
-  maxPositions: num("MAX_POSITIONS", 100),
+  // Concurrency is meant to be budget-bound, not position-count-bound;
+  // 1000 is effectively "as many as cash allows" (override via env).
+  maxPositions: num("MAX_POSITIONS", 1000),
   entrySlippagePct: num("ENTRY_SLIPPAGE_PCT", 1),
   exitSlippagePct: num("EXIT_SLIPPAGE_PCT", 1),
   // Close a position when it is down this many percent (0 disables).

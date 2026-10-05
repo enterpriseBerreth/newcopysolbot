@@ -24,7 +24,7 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 | `MIN_WALLET_TRADE_USD` | `50` | Skip wallet trades below this notional |
 | `STARTING_BUDGET_USD` | `10000` | Paper budget |
 | `STOP_LOSS_PCT` | `40` | Force-close positions down this much |
-| `MAX_POSITIONS` | `100` | Max simultaneous open positions |
+| `MAX_POSITIONS` | `1000` | Safety valve — concurrency is budget-bound |
 | `ENTRY_SLIPPAGE_PCT` / `EXIT_SLIPPAGE_PCT` | `1` | Fill realism |
 | `MARK_INTERVAL_MS` | `60000` | Stop-loss marking cadence |
 | `REPORT_HOURS_UTC` | `6,18` | UTC hours for ranking reports (12am + 12pm GMT-6) |
