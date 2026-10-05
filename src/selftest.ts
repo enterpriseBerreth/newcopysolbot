@@ -141,6 +141,7 @@ async function main(): Promise<void> {
     stopLossPct: 40,
     dataDir,
     pairProvider: async (mint) => prices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
     notifier,
   });
   await engine.load();
@@ -206,6 +207,26 @@ async function main(): Promise<void> {
   const sl = engine.ledger[engine.ledger.length - 1]!;
   expect(sl.reason === "stop-loss" && (sl.pnlUsd ?? 0) < 0, "stop-loss trade booked with reason + loss");
 
+  // 6b) Realistic fills: wallet's actual price derived from the SOL leg (SOL = $10).
+  prices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  // Wallet buys 100 tokens for 6 SOL ($60): derived fill $0.60, notional $60.
+  await engine.onTrades([ev({ signature: "E7", solDelta: -6 })]);
+  const pos7 = engine.state.positions[`${WALLET}:${MINT_A}`]!;
+  expect(approx(pos7.costUsd, 0.6, 1e-9), "clip = 1% of wallet's real $60 SOL spend");
+  expect(approx(pos7.qty, 0.6 / (0.6 * 1.01)), "entry fill = wallet's derived price + entry slippage");
+  const t7 = engine.ledger[engine.ledger.length - 1]!;
+  expect(approx(t7.priceUsd, 0.606), "ledger records wallet-derived entry price");
+  // Wallet sells 40 tokens for 1.2 SOL ($12): derived exit fill $0.30.
+  const qtyBeforeExit = pos7.qty;
+  await engine.onTrades([ev({ signature: "E8", side: "sell", tokenDelta: 40, remainingTokens: 60, solDelta: 1.2 })]);
+  const t8 = engine.ledger[engine.ledger.length - 1]!;
+  expect(approx(t8.priceUsd, 0.3 * 0.99), "exit fill = wallet's derived price - exit slippage");
+  expect(approx(t8.qty, qtyBeforeExit * 0.4), "exit still mirrors the sold fraction of the bag");
+  // Implausible SOL attribution (derived 20x market) -> fall back to market price.
+  await engine.onTrades([ev({ signature: "E9", tokenDelta: 100, remainingTokens: 160, solDelta: -200 })]);
+  const t9 = engine.ledger[engine.ledger.length - 1]!;
+  expect(approx(t9.priceUsd, 1.01), "derived fill 20x off market is rejected; market price used");
+
   // 7) Rankings + persistence.
   const rows = await engine.walletRankings();
   expect(rows.length === 1 && rows[0]!.wallet === WALLET, "rankings cover the traded wallet");
@@ -224,6 +245,7 @@ async function main(): Promise<void> {
     stopLossPct: 40,
     dataDir,
     pairProvider: async (mint) => prices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
     notifier,
   });
   await engine2.load();

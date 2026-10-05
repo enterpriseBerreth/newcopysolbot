@@ -4,7 +4,7 @@ import path from "node:path";
 import { createLogger } from "../logger.js";
 import { PROCESSED_SIG_RING_SIZE } from "./constants.js";
 import type { PairProvider } from "./prices.js";
-import { getPairInfo } from "./prices.js";
+import { getPairInfo, getSolPriceUsd } from "./prices.js";
 import { short } from "./watcher.js";
 import type { NotifierLike } from "./notifier.js";
 import type { PaperState, PaperTrade, Position, TradeEvent, WalletRankRow } from "./types.js";
@@ -21,6 +21,7 @@ export interface EngineOpts {
   stopLossPct: number;
   dataDir: string;
   pairProvider?: PairProvider;
+  solPriceProvider?: () => Promise<number>;
   notifier?: NotifierLike;
 }
 
@@ -34,6 +35,7 @@ export class PaperEngine {
   ledger: PaperTrade[] = [];
 
   private pair: PairProvider;
+  private solPrice: () => Promise<number>;
   private notifier: NotifierLike;
   private ledgerFile: string;
   private snapshotFile: string;
@@ -42,6 +44,7 @@ export class PaperEngine {
   constructor(private opts: EngineOpts) {
     this.state = defaultState(opts.startingBudgetUsd);
     this.pair = opts.pairProvider ?? getPairInfo;
+    this.solPrice = opts.solPriceProvider ?? getSolPriceUsd;
     this.notifier = opts.notifier ?? { send: async () => {} };
     this.ledgerFile = path.join(opts.dataDir, "paper-trades.jsonl");
     this.snapshotFile = path.join(opts.dataDir, "positions-snapshot.json");
@@ -118,14 +121,53 @@ export class PaperEngine {
 
   private async handleTrade(ev: TradeEvent): Promise<void> {
     const info = await this.pair(ev.mint);
-    const price = info?.priceUsd ?? 0;
-    if (!price) {
+    const marketPrice = info?.priceUsd ?? 0;
+    if (!marketPrice) {
       log.warn(`no price for ${ev.mint.slice(0, 8)}…; skipped ${ev.side}`);
       return;
     }
-    const walletNotional = ev.tokenDelta * price;
-    if (ev.side === "buy") await this.copyBuy(ev, price, info?.symbol ?? ev.mint.slice(0, 6), walletNotional);
-    else await this.copySell(ev, price, info?.symbol ?? ev.mint.slice(0, 6), walletNotional);
+    const { fillRef, walletNotional, derived } = await this.resolveFill(ev, marketPrice);
+    log.debug(
+      `${ev.side} ${ev.mint.slice(0, 8)}… fill $${fillRef.toPrecision(6)} ` +
+        `(${derived ? "wallet-derived" : "market"}) notional $${walletNotional.toFixed(2)}`,
+    );
+    if (ev.side === "buy") await this.copyBuy(ev, fillRef, info?.symbol ?? ev.mint.slice(0, 6), walletNotional);
+    else await this.copySell(ev, fillRef, info?.symbol ?? ev.mint.slice(0, 6), walletNotional);
+  }
+
+  /**
+   * Resolve the reference price for a copy fill.
+   *
+   * Realistic copying: when the wallet's swap moved native SOL, derive the
+   * wallet's ACTUAL fill price from the SOL leg (SOL moved x SOL price /
+   * tokens moved) and use that, so paper PnL reflects entering/exiting at
+   * roughly the same price as the copied wallet. Falls back to the current
+   * market mark for token<->token swaps or when the derived price is
+   * implausible (glitchy SOL attribution in multi-swap txs).
+   */
+  private async resolveFill(
+    ev: TradeEvent,
+    marketPrice: number,
+  ): Promise<{ fillRef: number; walletNotional: number; derived: boolean }> {
+    let fillRef = marketPrice;
+    let walletNotional = ev.tokenDelta * marketPrice;
+    let derived = false;
+    const solUsd = await this.solPrice();
+    const solMoved = ev.side === "buy" ? -ev.solDelta : ev.solDelta;
+    if (solUsd > 0 && solMoved > 1e-9) {
+      const candidate = (solMoved * solUsd) / ev.tokenDelta;
+      if (
+        Number.isFinite(candidate) &&
+        candidate > 0 &&
+        candidate <= marketPrice * 10 &&
+        candidate >= marketPrice * 0.1
+      ) {
+        fillRef = candidate;
+        walletNotional = solMoved * solUsd;
+        derived = true;
+      }
+    }
+    return { fillRef, walletNotional, derived };
   }
 
   private async copyBuy(

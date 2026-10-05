@@ -7,11 +7,12 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 1. **Wallet watching** — polls `getSignaturesForAddress` for each tracked wallet and fetches each new transaction.
 2. **Trade detection** — balance-diff decoding: any mint whose balance changed for the tracked wallet is a trade event. This works across every DEX/aggregator (Raydium, Pump.fun, Jupiter, Meteora, Orca, …) without per-DEX parsing. Plain transfers (airdrops, payments) are ignored: the tx must touch a known DEX program.
 3. **Copy sizing** — our entry is **1% of the copied wallet's trade notional** (they buy $1,400 → we enter $14; they buy $100 → we enter $1). Trades where the wallet spends **less than $50** are skipped.
-4. **Exits mirrored** — when a wallet sells X% of its bag, we sell X% of our position. Profits refill the paper cash balance.
-5. **Stop loss** — open positions are re-marked every 60s and force-closed at **-40%**.
-6. **Wallet rankings** — realized PnL, trade counts and positive/negative closed trades per copied wallet. Ranked reports are sent via Telegram at **12:00am and 12:00pm** (default hours 06:00/18:00 UTC = midnight/noon GMT-6, configurable via `REPORT_HOURS_UTC`) and exposed on `/rankings`.
-7. **Closed-trade alerts** — Telegram message after every closed trade with the copied wallet, token address/name, capital before → after, and PnL in $ and %. Entries send nothing.
-8. **Compounding** — capital = idle cash + deployed positions; all realized profits return to cash and are reused for new entries.
+4. **Exits mirrored** — when a wallet sells X% of its bag, we sell X% of our position; every subsequent buy/sell is mirrored proportionally, always at the 1% clip. Profits refill the paper cash balance.
+5. **Realistic fills** — when the wallet's swap moved native SOL, the wallet's actual fill price is derived from the SOL leg (SOL moved × SOL price ÷ tokens) and used as our paper fill ±1% slippage, so PnL reflects copying at their price rather than a late market mark. Token↔token swaps and implausible attributions fall back to the DexScreener mark.
+6. **Stop loss** — open positions are re-marked every 60s and force-closed at **-40%** (mark price, not the wallet's fill).
+7. **Wallet rankings** — realized PnL, trade counts and positive/negative closed trades per copied wallet. Ranked reports are sent via Telegram at **12:00am and 12:00pm** (default hours 06:00/18:00 UTC = midnight/noon GMT-6, configurable via `REPORT_HOURS_UTC`) and exposed on `/rankings`.
+8. **Closed-trade alerts** — Telegram message after every closed trade with the copied wallet, token address/name, capital before → after, and PnL in $ and %. Entries send nothing.
+9. **Compounding** — capital = idle cash + deployed positions; all realized profits return to cash and are reused for new entries.
 
 ## Parameters (env)
 
