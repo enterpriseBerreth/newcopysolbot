@@ -33,8 +33,8 @@ export const config = {
   minWalletTradeUsd: num("MIN_WALLET_TRADE_USD", 50),
 
   // Paper account.
-  startingBudgetUsd: num("STARTING_BUDGET_USD", 1000),
-  maxPositions: num("MAX_POSITIONS", 40),
+  startingBudgetUsd: num("STARTING_BUDGET_USD", 10_000),
+  maxPositions: num("MAX_POSITIONS", 100),
   entrySlippagePct: num("ENTRY_SLIPPAGE_PCT", 1),
   exitSlippagePct: num("EXIT_SLIPPAGE_PCT", 1),
   // Close a position when it is down this many percent (0 disables).

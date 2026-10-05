@@ -252,6 +252,28 @@ async function main(): Promise<void> {
   expect(engine2.ledger.length === engine.ledger.length, "ledger rebuilt from disk on restart");
   expect(engine2.state.processedSigs.includes(`${WALLET}:E1`), "processed-sig dedup survives restart");
 
+  // 8) Budget guard: a buy the account cannot afford is skipped entirely.
+  const poorSent: string[] = [];
+  const poorDir = `${dataDir}-poor`;
+  const poorEngine = new PaperEngine({
+    startingBudgetUsd: 0.5,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: poorDir,
+    pairProvider: async (mint) => prices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+    notifier: { send: async (t) => void poorSent.push(t) },
+  });
+  await poorEngine.load();
+  await poorEngine.onTrades([ev({ signature: "P1" })]); // $100 notional -> $1 clip > $0.50 cash
+  expect(!poorEngine.state.positions[`${WALLET}:${MINT_A}`], "unaffordable buy is skipped entirely");
+  expect(approx(poorEngine.state.cashUsd, 0.5, 1e-9), "cash untouched when skipping unaffordable buy");
+  expect(poorSent.length === 0, "no alert for skipped entry");
+
   console.log("── watcher cursor ──");
 
   const fetched: TradeEvent[] = [];
@@ -280,6 +302,7 @@ async function main(): Promise<void> {
   expect(fetched[0]!.side === "buy", "watcher emitted decoded buy from S2");
 
   await fs.rm(dataDir, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
