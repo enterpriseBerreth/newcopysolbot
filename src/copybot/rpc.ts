@@ -62,7 +62,7 @@ export interface JsonTokenBalance {
   accountIndex: number;
   mint: string;
   owner?: string;
-  tokenAmount: { uiAmount: number | null; decimals: number };
+  tokenAmount?: { uiAmount: number | null; decimals: number };
 }
 
 export interface JsonTransaction {

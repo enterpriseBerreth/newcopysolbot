@@ -4,7 +4,7 @@ import type { SolRpc } from "./rpc.js";
 import type { TradeEvent } from "./types.js";
 
 const log = createLogger("watcher");
-const SIGS_PER_POLL = 25;
+const SIGS_PER_POLL = 50;
 /** Pause between per-wallet polls to spread RPC load. */
 const WALLET_STAGGER_MS = 300;
 
