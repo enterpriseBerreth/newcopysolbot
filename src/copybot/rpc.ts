@@ -42,9 +42,11 @@ export class SolRpc {
   }
 
   getTransaction(signature: string) {
+    // version 1 txs now exist on mainnet; maxSupportedTransactionVersion: 1
+    // accepts legacy, v0 and v1.
     return this.call<JsonTransaction | null>("getTransaction", [
       signature,
-      { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" },
+      { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" },
     ]);
   }
 }

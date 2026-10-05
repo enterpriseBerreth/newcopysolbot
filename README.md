@@ -25,7 +25,7 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 | `ENTRY_SLIPPAGE_PCT` / `EXIT_SLIPPAGE_PCT` | `1` | Fill realism |
 | `MARK_INTERVAL_MS` | `60000` | Stop-loss marking cadence |
 | `DAILY_REPORT_HOUR_UTC` | `0` | Hour of the daily rankings report |
-| `POLL_INTERVAL_MS` | `5000` | Per-wallet signature polling cadence |
+| `POLL_INTERVAL_MS` | `15000` | Per-wallet signature polling cadence |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Telegram alerts |
 | `COPYBOT_ENABLED` | `true` | Set `false` for healthcheck-only mode |
 

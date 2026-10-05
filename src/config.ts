@@ -19,7 +19,7 @@ function bool(key: string, def: boolean): boolean {
 export const config = {
   rpcUrl: str("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"),
   port: num("PORT", 3000),
-  pollIntervalMs: num("POLL_INTERVAL_MS", 5000),
+  pollIntervalMs: num("POLL_INTERVAL_MS", 15000),
   enabled: bool("COPYBOT_ENABLED", true),
 
   trackedWallets: str("TRACKED_WALLETS", DEFAULT_WALLETS)

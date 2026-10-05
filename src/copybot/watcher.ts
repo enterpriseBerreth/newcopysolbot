@@ -4,7 +4,9 @@ import type { SolRpc } from "./rpc.js";
 import type { TradeEvent } from "./types.js";
 
 const log = createLogger("watcher");
-const SIGS_PER_POLL = 12;
+const SIGS_PER_POLL = 25;
+/** Pause between per-wallet polls to spread RPC load. */
+const WALLET_STAGGER_MS = 300;
 
 export class WalletWatcher {
   private stopped = false;
@@ -46,6 +48,7 @@ export class WalletWatcher {
         } catch (err) {
           log.warn(`poll ${short(w)} failed: ${String(err)}`);
         }
+        if (!this.stopped) await new Promise((r) => setTimeout(r, WALLET_STAGGER_MS));
       }
       const elapsed = Date.now() - started;
       const wait = Math.max(250, this.pollMs - elapsed);
