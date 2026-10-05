@@ -195,12 +195,7 @@ export class PaperEngine {
       `BUY ${symbol}: ${short(ev.wallet)} spent ~$${walletNotional.toFixed(0)} -> we clip $${ourUsd.toFixed(2)} ` +
         `@ $${fillPrice.toPrecision(6)} (qty ${qty.toPrecision(6)}), cash $${this.state.cashUsd.toFixed(2)}`,
     );
-    await this.notifier.send(
-      `COPY BUY ${symbol}\n` +
-        `${short(ev.wallet)} bought ~$${fmtUsd(walletNotional)} (1% clip)\n` +
-        `Entry: $${ourUsd.toFixed(2)} @ $${fillPrice.toPrecision(6)}\n` +
-        `Cash left: $${this.state.cashUsd.toFixed(2)}`,
-    );
+    // No Telegram alert for entries: only CLOSED trades alert.
   }
 
   private async copySell(
@@ -226,11 +221,13 @@ export class PaperEngine {
     const costSold = pos.costUsd * frac;
     const pnlUsd = proceeds - costSold;
     const pnlPct = costSold > 0 ? (pnlUsd / costSold) * 100 : 0;
+    const capitalBefore = this.capital();
 
     pos.qty -= sellQty;
     pos.costUsd -= costSold;
     this.state.cashUsd += proceeds;
     if (pos.qty * fillPrice < 0.01) delete this.state.positions[key];
+    const capitalAfter = this.capital();
 
     const trade: PaperTrade = {
       id: this.nextId(),
@@ -253,12 +250,15 @@ export class PaperEngine {
       `SELL ${symbol}: ${short(ev.wallet)} sold ~$${walletNotional.toFixed(0)} -> we exit ${(frac * 100).toFixed(0)}% ` +
         `for $${proceeds.toFixed(2)} (PnL $${pnlUsd.toFixed(2)} / ${pnlPct.toFixed(1)}%), cash $${this.state.cashUsd.toFixed(2)}`,
     );
+    // Closed-trade alert: capital (cash + deployed) already includes the
+    // realized profit, so proceeds compound into future entries.
     await this.notifier.send(
-      `COPY SELL ${symbol}\n` +
-        `${short(ev.wallet)} sold ~$${fmtUsd(walletNotional)}\n` +
-        `Exit ${(frac * 100).toFixed(0)}%: $${proceeds.toFixed(2)} @ $${fillPrice.toPrecision(6)}\n` +
-        `PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(1)}%)\n` +
-        `Cash: $${this.state.cashUsd.toFixed(2)}`,
+      `TRADE CLOSED — COPY SELL ${symbol}\n` +
+        `Wallet: ${ev.wallet}\n` +
+        `Token: ${symbol} (${ev.mint})\n` +
+        `Exit: ${(frac * 100).toFixed(0)}% of position @ $${fillPrice.toPrecision(6)}\n` +
+        `PnL: ${pnlUsd >= 0 ? "+" : ""}$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(1)}%)\n` +
+        `Capital: $${capitalBefore.toFixed(2)} -> $${capitalAfter.toFixed(2)}`,
     );
   }
 
@@ -290,9 +290,11 @@ export class PaperEngine {
     const proceeds = pos.qty * fillPrice;
     const pnlUsd = proceeds - pos.costUsd;
     const pnlPct = pos.costUsd > 0 ? (pnlUsd / pos.costUsd) * 100 : 0;
+    const capitalBefore = this.capital();
 
     this.state.cashUsd += proceeds;
     delete this.state.positions[pos.key];
+    const capitalAfter = this.capital();
 
     const trade: PaperTrade = {
       id: this.nextId(),
@@ -316,10 +318,12 @@ export class PaperEngine {
         `cash $${this.state.cashUsd.toFixed(2)}`,
     );
     await this.notifier.send(
-      `STOP LOSS ${pos.symbol}\n` +
-        `Exited full position: $${proceeds.toFixed(2)} @ $${fillPrice.toPrecision(6)}\n` +
-        `PnL: $${pnlUsd.toFixed(2)} (${pnlPct.toFixed(1)}%)\n` +
-        `Cash: $${this.state.cashUsd.toFixed(2)}`,
+      `TRADE CLOSED — STOP LOSS ${pos.symbol}\n` +
+        `Wallet: ${pos.wallet}\n` +
+        `Token: ${pos.symbol} (${pos.mint})\n` +
+        `Exit: 100% of position @ $${fillPrice.toPrecision(6)}\n` +
+        `PnL: ${pnlUsd >= 0 ? "+" : ""}$${pnlUsd.toFixed(2)} (${pnlPct.toFixed(1)}%)\n` +
+        `Capital: $${capitalBefore.toFixed(2)} -> $${capitalAfter.toFixed(2)}`,
     );
   }
 
@@ -418,10 +422,19 @@ export class PaperEngine {
     await this.notifier.send(this.formatRankings(rows));
   }
 
+  /** Total trading capital: idle cash + capital deployed in open positions. Realized profits compound into this. */
+  capital(): number {
+    let deployed = 0;
+    for (const pos of Object.values(this.state.positions)) deployed += pos.costUsd;
+    return this.state.cashUsd + deployed;
+  }
+
   summary(): Record<string, unknown> {
     const realized = this.ledger.reduce((s, t) => s + (t.pnlUsd ?? 0), 0);
     return {
+      capitalUsd: round2(this.capital()),
       cashUsd: round2(this.state.cashUsd),
+      deployedUsd: round2(this.capital() - this.state.cashUsd),
       openPositions: Object.keys(this.state.positions).length,
       ledgerTrades: this.ledger.length,
       realizedPnlUsd: round2(realized),
@@ -433,10 +446,6 @@ export class PaperEngine {
     this.seq += 1;
     return `${Date.now()}-${this.seq}-${randomUUID().slice(0, 8)}`;
   }
-}
-
-function fmtUsd(v: number): string {
-  return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(2);
 }
 
 function fmtPnl(v: number): string {

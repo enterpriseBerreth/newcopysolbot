@@ -163,6 +163,7 @@ async function main(): Promise<void> {
   expect(approx(engine.state.cashUsd, 999), "entry clip = $1 (1% of $100 notional)");
   expect(approx(pos1.qty, 1 / 1.01), "entry qty = clip / slipped price");
   expect(pos1.symbol === "AAAA", "position symbol set");
+  expect(sent.length === 0, "no telegram alert on entry (closed trades only)");
 
   // 2) Dust: wallet buys 40 AAAA @ $1 = $40 notional < $50 -> skipped.
   const cashBefore = engine.state.cashUsd;
@@ -187,6 +188,14 @@ async function main(): Promise<void> {
   // 5) Full exit: wallet sells everything remaining.
   await engine.onTrades([ev({ signature: "E5", side: "sell", tokenDelta: 180, remainingTokens: 0 })]);
   expect(!engine.state.positions[`${WALLET}:${MINT_A}`], "full exit removes position");
+  const closeMsg = sent.find((m) => m.includes("TRADE CLOSED"));
+  expect(
+    !!closeMsg && closeMsg.includes(WALLET) && closeMsg.includes(MINT_A),
+    "close alert carries full wallet + token address",
+  );
+  expect(!!closeMsg && closeMsg.includes("PnL:") && closeMsg.includes("Capital:"), "close alert carries PnL + capital before/after");
+  const realizedSoFar = engine.ledger.reduce((s, t) => s + (t.pnlUsd ?? 0), 0);
+  expect(approx(engine.capital(), 1000 + realizedSoFar, 1e-6), "capital = budget + realized PnL (profits compound)");
 
   // 6) Stop loss: new entry, then price -45% -> markAll force-closes.
   prices.set(MINT_B, { priceUsd: 2, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
