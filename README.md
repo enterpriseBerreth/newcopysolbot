@@ -15,7 +15,7 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 
 | Variable | Default | Description |
 |---|---|---|
-| `SOLANA_RPC_URL` | public mainnet | RPC endpoint (paid endpoint recommended for 10+ wallets) |
+| `SOLANA_RPC_URL` | publicnode | RPC endpoint (paid endpoint recommended for 10+ wallets) |
 | `TRACKED_WALLETS` | starter list | Comma-separated wallets to copy |
 | `CLIP_PCT` | `1` | Our entry as % of wallet's trade notional |
 | `MIN_WALLET_TRADE_USD` | `50` | Skip wallet trades below this notional |

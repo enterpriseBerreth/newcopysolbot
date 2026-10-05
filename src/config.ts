@@ -17,7 +17,7 @@ function bool(key: string, def: boolean): boolean {
 }
 
 export const config = {
-  rpcUrl: str("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com"),
+  rpcUrl: str("SOLANA_RPC_URL", "https://solana-rpc.publicnode.com"),
   port: num("PORT", 3000),
   pollIntervalMs: num("POLL_INTERVAL_MS", 15000),
   enabled: bool("COPYBOT_ENABLED", true),
