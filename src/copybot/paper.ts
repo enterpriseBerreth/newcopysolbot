@@ -338,16 +338,18 @@ export class PaperEngine {
     interface Acc {
       dayPnl: number;
       dayTrades: number;
-      dayWins: number;
+      dayPos: number;
+      dayNeg: number;
       weekPnl: number;
       weekTrades: number;
-      weekWins: number;
+      weekPos: number;
+      weekNeg: number;
     }
     const acc = new Map<string, Acc>();
     const get = (w: string): Acc => {
       let a = acc.get(w);
       if (!a) {
-        a = { dayPnl: 0, dayTrades: 0, dayWins: 0, weekPnl: 0, weekTrades: 0, weekWins: 0 };
+        a = { dayPnl: 0, dayTrades: 0, dayPos: 0, dayNeg: 0, weekPnl: 0, weekTrades: 0, weekPos: 0, weekNeg: 0 };
         acc.set(w, a);
       }
       return a;
@@ -355,15 +357,19 @@ export class PaperEngine {
 
     for (const t of this.ledger) {
       const a = get(t.wallet);
+      const won = t.side === "sell" && (t.pnlUsd ?? 0) > 0;
+      const lost = t.side === "sell" && (t.pnlUsd ?? 0) < 0;
       if (t.ts >= dayStart) {
         a.dayTrades++;
         a.dayPnl += t.pnlUsd ?? 0;
-        if (t.side === "sell" && (t.pnlUsd ?? 0) > 0) a.dayWins++;
+        if (won) a.dayPos++;
+        if (lost) a.dayNeg++;
       }
       if (t.ts >= weekStart) {
         a.weekTrades++;
         a.weekPnl += t.pnlUsd ?? 0;
-        if (t.side === "sell" && (t.pnlUsd ?? 0) > 0) a.weekWins++;
+        if (won) a.weekPos++;
+        if (lost) a.weekNeg++;
       }
     }
 
@@ -378,16 +384,19 @@ export class PaperEngine {
 
     const rows: WalletRankRow[] = [];
     for (const w of wallets) {
-      const a = acc.get(w) ?? { dayPnl: 0, dayTrades: 0, dayWins: 0, weekPnl: 0, weekTrades: 0, weekWins: 0 };
+      const a =
+        acc.get(w) ?? { dayPnl: 0, dayTrades: 0, dayPos: 0, dayNeg: 0, weekPnl: 0, weekTrades: 0, weekPos: 0, weekNeg: 0 };
       rows.push({
         wallet: w,
         short: short(w),
         dayPnl: a.dayPnl,
         dayTrades: a.dayTrades,
-        dayWins: a.dayWins,
+        dayPos: a.dayPos,
+        dayNeg: a.dayNeg,
         weekPnl: a.weekPnl,
         weekTrades: a.weekTrades,
-        weekWins: a.weekWins,
+        weekPos: a.weekPos,
+        weekNeg: a.weekNeg,
         unrealizedUsd: unrealized.get(w) ?? 0,
         rank: 0,
       });
@@ -396,7 +405,7 @@ export class PaperEngine {
     rows.sort(
       (x, y) =>
         y.dayPnl - x.dayPnl ||
-        y.dayWins - x.dayWins ||
+        y.dayPos - x.dayPos ||
         y.dayTrades - x.dayTrades ||
         y.weekPnl - x.weekPnl,
     );
@@ -408,9 +417,9 @@ export class PaperEngine {
     const lines: string[] = [`WALLET RANKINGS — ${new Date().toUTCString()}`, ""];
     for (const r of rows) {
       lines.push(
-        `${r.rank}. ${r.short}`,
-        `   day:   ${fmtPnl(r.dayPnl)}  (${r.dayTrades} trades, ${pct(r.dayWins, r.dayTrades)} win)`,
-        `   week:  ${fmtPnl(r.weekPnl)}  (${r.weekTrades} trades, ${pct(r.weekWins, r.weekTrades)} win)`,
+        `${r.rank}. ${r.short}  ${fmtPnl(r.dayPnl)} day`,
+        `   day:   ${r.dayTrades} trades | ${r.dayPos} pos / ${r.dayNeg} neg`,
+        `   week:  ${fmtPnl(r.weekPnl)} | ${r.weekTrades} trades | ${r.weekPos} pos / ${r.weekNeg} neg`,
         `   open:  ${fmtPnl(r.unrealizedUsd)} unrealized`,
       );
     }
@@ -450,10 +459,6 @@ export class PaperEngine {
 
 function fmtPnl(v: number): string {
   return `${v >= 0 ? "+" : ""}$${v.toFixed(2)}`;
-}
-
-function pct(wins: number, total: number): string {
-  return total > 0 ? `${((wins / total) * 100).toFixed(0)}%` : "—";
 }
 
 function round2(v: number): number {

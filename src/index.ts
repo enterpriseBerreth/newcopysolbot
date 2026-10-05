@@ -72,15 +72,19 @@ async function main(): Promise<void> {
   }, config.markIntervalMs);
   markTimer.unref();
 
-  // Daily rankings report.
-  let lastReportDay = "";
+  // Ranking reports at each configured UTC hour (default: 12am + 12pm GMT-6).
+  const lastReportKey = new Set<string>();
   const reportTimer = setInterval(() => {
     const now = new Date();
-    const day = now.toISOString().slice(0, 10);
-    if (now.getUTCHours() === config.dailyReportHourUtc && lastReportDay !== day) {
-      lastReportDay = day;
-      engine.sendDailyRankings().catch((err) => log.error(`daily report failed: ${String(err)}`));
-    }
+    const hour = now.getUTCHours();
+    if (!config.reportHoursUtc.includes(hour)) return;
+    const key = `${now.toISOString().slice(0, 10)}-${hour}`;
+    if (lastReportKey.has(key)) return;
+    lastReportKey.add(key);
+    engine
+      .sendDailyRankings()
+      .then(() => log.info(`ranking report sent (hour ${hour} UTC)`))
+      .catch((err) => log.error(`ranking report failed: ${String(err)}`));
   }, 30_000);
   reportTimer.unref();
 

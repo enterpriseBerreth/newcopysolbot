@@ -210,6 +210,9 @@ async function main(): Promise<void> {
   const rows = await engine.walletRankings();
   expect(rows.length === 1 && rows[0]!.wallet === WALLET, "rankings cover the traded wallet");
   expect(rows[0]!.dayTrades >= 5, "daily trade count reflects ledger");
+  expect(rows[0]!.dayPos >= 2 && rows[0]!.dayNeg >= 1, "daily pos/neg breakdown counts wins and losses");
+  const report = engine.formatRankings(rows);
+  expect(report.includes("trades |") && report.includes("pos / "), "report lists trades with pos/neg split");
   await engine.save();
   const engine2 = new PaperEngine({
     startingBudgetUsd: 1000,

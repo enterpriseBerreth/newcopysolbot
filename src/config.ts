@@ -41,8 +41,11 @@ export const config = {
   stopLossPct: num("STOP_LOSS_PCT", 40),
   markIntervalMs: num("MARK_INTERVAL_MS", 60_000),
 
-  // Daily wallet ranking report hour (UTC).
-  dailyReportHourUtc: num("DAILY_REPORT_HOUR_UTC", 0),
+  // Ranking report hours (UTC). Default = 12:00am and 12:00pm GMT-6.
+  reportHoursUtc: str("REPORT_HOURS_UTC", "6,18")
+    .split(",")
+    .map((h) => parseInt(h.trim(), 10))
+    .filter((h) => Number.isInteger(h) && h >= 0 && h <= 23),
 
   dataDir: str("DATA_DIR", "data"),
 

@@ -9,7 +9,9 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 3. **Copy sizing** — our entry is **1% of the copied wallet's trade notional** (they buy $1,400 → we enter $14; they buy $100 → we enter $1). Trades where the wallet spends **less than $50** are skipped.
 4. **Exits mirrored** — when a wallet sells X% of its bag, we sell X% of our position. Profits refill the paper cash balance.
 5. **Stop loss** — open positions are re-marked every 60s and force-closed at **-40%**.
-6. **Wallet rankings** — daily and weekly realized PnL, trade count and win rate per copied wallet; a ranked report is sent via Telegram once per day (default 00:00 UTC) and exposed on `/rankings`.
+6. **Wallet rankings** — realized PnL, trade counts and positive/negative closed trades per copied wallet. Ranked reports are sent via Telegram at **12:00am and 12:00pm** (default hours 06:00/18:00 UTC = midnight/noon GMT-6, configurable via `REPORT_HOURS_UTC`) and exposed on `/rankings`.
+7. **Closed-trade alerts** — Telegram message after every closed trade with the copied wallet, token address/name, capital before → after, and PnL in $ and %. Entries send nothing.
+8. **Compounding** — capital = idle cash + deployed positions; all realized profits return to cash and are reused for new entries.
 
 ## Parameters (env)
 
@@ -24,7 +26,7 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 | `MAX_POSITIONS` | `40` | Max simultaneous open positions |
 | `ENTRY_SLIPPAGE_PCT` / `EXIT_SLIPPAGE_PCT` | `1` | Fill realism |
 | `MARK_INTERVAL_MS` | `60000` | Stop-loss marking cadence |
-| `DAILY_REPORT_HOUR_UTC` | `0` | Hour of the daily rankings report |
+| `REPORT_HOURS_UTC` | `6,18` | UTC hours for ranking reports (12am + 12pm GMT-6) |
 | `POLL_INTERVAL_MS` | `15000` | Per-wallet signature polling cadence |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Telegram alerts |
 | `COPYBOT_ENABLED` | `true` | Set `false` for healthcheck-only mode |

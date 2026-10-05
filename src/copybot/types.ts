@@ -68,10 +68,12 @@ export interface WalletRankRow {
   short: string;
   dayPnl: number;
   dayTrades: number;
-  dayWins: number;
+  dayPos: number;
+  dayNeg: number;
   weekPnl: number;
   weekTrades: number;
-  weekWins: number;
+  weekPos: number;
+  weekNeg: number;
   unrealizedUsd: number;
   rank: number;
 }
