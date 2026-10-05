@@ -1,0 +1,25 @@
+{
+  "name": "newcopysolbot",
+  "version": "1.0.0",
+  "description": "COPY-SOL — paper copy-trading bot for Solana. Mirrors buys/sells of tracked wallets using balance-diff detection across Raydium, Pump.fun and Jupiter. No real transactions are sent.",
+  "type": "module",
+  "main": "src/index.ts",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "selftest": "tsx src/selftest.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0"
+  }
+}
