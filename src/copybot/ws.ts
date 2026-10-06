@@ -7,6 +7,7 @@ import type { TradeEvent } from "./types.js";
 const log = createLogger("ws");
 
 const MAX_QUEUE = 500;
+const BATCH_SIZE = 10;
 const MAX_BACKOFF_MS = 30_000;
 
 export interface WsLike {
@@ -37,6 +38,8 @@ export class WsTradeWatcher {
   private queue: string[] = [];
   private queued = new Set<string>();
   private draining = false;
+  private inFlight = 0;
+  private retries = new Map<string, number>();
   private backoffMs = 1000;
   private nextId = 1;
   private subscriptions = new Set<number>();
@@ -62,7 +65,7 @@ export class WsTradeWatcher {
   }
 
   get pending(): number {
-    return this.queue.length + (this.draining ? 1 : 0);
+    return this.queue.length + this.inFlight;
   }
 
   hasSeen(signature: string): boolean {
@@ -176,10 +179,19 @@ export class WsTradeWatcher {
     this.draining = true;
     try {
       while (this.queue.length > 0) {
-        const sig = this.queue.shift()!;
+        const signatures = this.queue.splice(0, BATCH_SIZE);
+        this.inFlight = signatures.length;
+        let transactions: Awaited<ReturnType<SolRpc["getTransactions"]>> | null = null;
         try {
-          const tx = await this.rpc.getTransaction(sig);
-          if (tx) {
+          transactions = await this.rpc.getTransactions(signatures);
+        } catch (err) {
+          log.warn(`batch fetch failed; retrying ${signatures.length} transaction(s) individually: ${String(err)}`);
+        }
+        for (let index = 0; index < signatures.length; index++) {
+          const sig = signatures[index]!;
+          try {
+            const tx = transactions ? transactions[index] : await this.rpc.getTransaction(sig);
+            if (!tx) throw new Error("transaction not yet available");
             this.fetched++;
             const events: TradeEvent[] = [];
             for (const w of this.wallets) events.push(...extractTrades(tx, w));
@@ -187,13 +199,20 @@ export class WsTradeWatcher {
             if (events.length > 0) await this.onTrades(events);
             this.recent.add(sig);
             if (this.recent.size > 2000) this.recent.delete(this.recent.values().next().value!);
-          } else {
-            log.warn(`transaction ${short(sig)} unavailable; polling will retry`);
+            this.retries.delete(sig);
+          } catch (err) {
+            const attempt = (this.retries.get(sig) ?? 0) + 1;
+            log.warn(`fetch ${short(sig)} failed (${attempt}/5): ${String(err)}`);
+            if (attempt < 5 && !this.stopped) {
+              this.retries.set(sig, attempt);
+              setTimeout(() => this.enqueue(sig), 5000);
+            } else {
+              this.retries.delete(sig);
+            }
+          } finally {
+            this.queued.delete(sig);
+            this.inFlight--;
           }
-        } catch (err) {
-          log.warn(`fetch ${short(sig)} failed: ${String(err)}`);
-        } finally {
-          this.queued.delete(sig);
         }
       }
     } finally {

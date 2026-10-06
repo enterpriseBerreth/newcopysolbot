@@ -10,10 +10,14 @@ export class SolRpc {
   constructor(
     private url: string,
     /** Minimum spacing between any two RPC calls (ms). Keeps us under provider rate limits. */
-    private minIntervalMs = 120,
+    private minIntervalMs = 350,
   ) {}
 
   async call<T>(method: string, params: unknown[], retries = 3): Promise<T> {
+    return this.request<T>({ jsonrpc: "2.0", id: 1, method, params }, method, retries);
+  }
+
+  private async request<T>(body: unknown, label: string, retries = 3): Promise<T> {
     const run = async (): Promise<T> => {
       let lastErr: unknown;
       for (let attempt = 0; attempt <= retries; attempt++) {
@@ -24,7 +28,7 @@ export class SolRpc {
           const res = await fetch(this.url, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+            body: JSON.stringify(body),
             signal: AbortSignal.timeout(20_000),
           });
           if (res.status === 429) {
@@ -32,18 +36,20 @@ export class SolRpc {
             const cooldown = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 5_000;
             this.minIntervalMs = Math.min(5_000, Math.max(this.minIntervalMs * 2, 1_000));
             await sleep(Math.min(60_000, cooldown));
-            throw new Error(`rpc ${method} -> HTTP 429`);
+            throw new Error(`rpc ${label} -> HTTP 429`);
           }
-          if (res.status >= 500) throw new Error(`rpc ${method} -> HTTP ${res.status}`);
-          const json = (await res.json()) as { result?: T; error?: { message: string } };
-          if (json.error) throw new Error(`rpc ${method} -> ${json.error.message}`);
-          if (json.result === undefined) throw new Error(`rpc ${method} -> empty result`);
+          if (res.status >= 500) throw new Error(`rpc ${label} -> HTTP ${res.status}`);
+          if (!res.ok) throw new Error(`rpc ${label} -> HTTP ${res.status}`);
+          const json = (await res.json()) as { result?: T; error?: { message: string } } | unknown[];
+          if (Array.isArray(json)) return json as T;
+          if (json.error) throw new Error(`rpc ${label} -> ${json.error.message}`);
+          if (json.result === undefined) throw new Error(`rpc ${label} -> empty result`);
           return json.result;
         } catch (err) {
           lastErr = err;
           if (attempt < retries) {
             const delay = 1000 * 2 ** attempt;
-            log.warn(`${method} failed (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms: ${String(err)}`);
+            log.warn(`${label} failed (attempt ${attempt + 1}/${retries + 1}), retrying in ${delay}ms: ${String(err)}`);
             await sleep(delay);
           }
         }
@@ -63,12 +69,34 @@ export class SolRpc {
   }
 
   getTransaction(signature: string) {
-    // version 1 txs now exist on mainnet; maxSupportedTransactionVersion: 1
-    // accepts legacy, v0 and v1.
     return this.call<JsonTransaction | null>("getTransaction", [
       signature,
       { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" },
     ]);
+  }
+
+  async getTransactions(signatures: string[]): Promise<(JsonTransaction | null)[]> {
+    if (signatures.length === 0) return [];
+    const responses = await this.request<Array<{ id: number; result?: JsonTransaction | null; error?: { message: string } }>>(
+      signatures.map((signature, index) => ({
+        jsonrpc: "2.0",
+        id: index + 1,
+        method: "getTransaction",
+        params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }],
+      })),
+      "getTransaction batch",
+    );
+    if (!Array.isArray(responses) || responses.length !== signatures.length) {
+      throw new Error("rpc getTransaction batch -> incomplete response");
+    }
+    const byId = new Map(responses.map((response) => [response.id, response]));
+    return signatures.map((_, index) => {
+      const response = byId.get(index + 1);
+      if (!response || response.error || response.result === undefined) {
+        throw new Error(`rpc getTransaction batch item ${index + 1} -> ${response?.error?.message ?? "missing result"}`);
+      }
+      return response.result;
+    });
   }
 }
 
