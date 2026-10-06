@@ -39,6 +39,8 @@ async function main(): Promise<void> {
       wsHealthy: wsWatcher?.healthy ?? false,
       wsPending: wsWatcher?.pending ?? 0,
       wsDropped: wsWatcher?.droppedNotifications ?? 0,
+      wsFetched: wsWatcher?.fetchedTransactions ?? 0,
+      wsDecodedTrades: wsWatcher?.decodedTrades ?? 0,
     }),
     stats: async () => ({
       ...engine.summary(),

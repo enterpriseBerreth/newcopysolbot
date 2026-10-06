@@ -42,6 +42,16 @@ export class WsTradeWatcher {
   private subscriptions = new Set<number>();
   private recent = new Set<string>();
   private dropped = 0;
+  private fetched = 0;
+  private decoded = 0;
+
+  get fetchedTransactions(): number {
+    return this.fetched;
+  }
+
+  get decodedTrades(): number {
+    return this.decoded;
+  }
 
   get droppedNotifications(): number {
     return this.dropped;
@@ -170,8 +180,10 @@ export class WsTradeWatcher {
         try {
           const tx = await this.rpc.getTransaction(sig);
           if (tx) {
+            this.fetched++;
             const events: TradeEvent[] = [];
             for (const w of this.wallets) events.push(...extractTrades(tx, w));
+            this.decoded += events.length;
             if (events.length > 0) await this.onTrades(events);
             this.recent.add(sig);
             if (this.recent.size > 2000) this.recent.delete(this.recent.values().next().value!);
