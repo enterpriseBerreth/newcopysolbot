@@ -61,7 +61,7 @@ function sumWalletBalances(balances: JsonTokenBalance[], wallet: string): Map<st
   const out = new Map<string, number>();
   for (const tb of balances) {
     if (tb.owner !== wallet) continue;
-    const amount = tb.tokenAmount?.uiAmount ?? 0;
+    const amount = Number(tb.uiTokenAmount?.uiAmountString ?? tb.uiTokenAmount?.uiAmount ?? 0);
     out.set(tb.mint, (out.get(tb.mint) ?? 0) + amount);
   }
   return out;

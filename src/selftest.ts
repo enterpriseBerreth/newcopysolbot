@@ -59,7 +59,7 @@ function makeTx(opts: TxOpts): JsonTransaction {
       accountIndex: 2,
       mint: t.mint,
       owner: WALLET,
-      tokenAmount: { uiAmount: which === "pre" ? t.pre : t.post, decimals: 6 },
+      uiTokenAmount: { uiAmount: which === "pre" ? t.pre : t.post, uiAmountString: String(which === "pre" ? t.pre : t.post), decimals: 6 },
     }));
   return {
     blockTime: Math.floor(Date.now() / 1000),
@@ -91,6 +91,21 @@ async function main(): Promise<void> {
   expect(b.side === "buy" && b.mint === MINT_A, "buy event has right side + mint");
   expect(approx(b.tokenDelta, 100), "buy tokenDelta = 100");
   expect(approx(b.remainingTokens, 100), "buy remainingTokens = 100");
+  expect(buyTx.meta?.postTokenBalances?.[0]?.uiTokenAmount?.uiAmountString === "100", "decoder fixture uses live RPC uiTokenAmount shape");
+
+  const realisticUsdcBuy = makeTx({
+    sig: "USDCBUY",
+    programs: [DEX],
+    tokens: [
+      { mint: MINT_A, pre: 34313184.415534, post: 34470574.116279 },
+      { mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", pre: 138.773707, post: 0.38 },
+    ],
+  });
+  expect(
+    extractTrades(realisticUsdcBuy, WALLET).length === 1 &&
+    approx(extractTrades(realisticUsdcBuy, WALLET)[0]!.tokenDelta, 157389.700745, 1e-5),
+    "live-shaped USDC buy decodes token balance difference",
+  );
 
   const partialSellTx = makeTx({
     sig: "SELLSIG",
