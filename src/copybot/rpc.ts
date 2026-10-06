@@ -10,7 +10,7 @@ export class SolRpc {
   constructor(
     private url: string,
     /** Minimum spacing between any two RPC calls (ms). Keeps us under provider rate limits. */
-    private minIntervalMs = 350,
+    private minIntervalMs = 120,
   ) {}
 
   async call<T>(method: string, params: unknown[], retries = 3): Promise<T> {
