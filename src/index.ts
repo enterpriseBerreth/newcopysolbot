@@ -29,11 +29,14 @@ async function main(): Promise<void> {
   });
   await engine.load();
   let wsWatcher: WsTradeWatcher | null = null;
+  let closing = Boolean(config.manualCloseId && config.manualCloseId !== engine.state.lastManualCloseId);
 
   const server = startServer(config.port, {
     health: async () => ({
       ok: true,
       enabled: config.enabled,
+      closing,
+      lastManualCloseId: engine.state.lastManualCloseId ?? null,
       uptimeSec: Math.round(process.uptime()),
       wallets: config.trackedWallets.map((w) => short(w)),
       wsHealthy: wsWatcher?.healthy ?? false,
@@ -54,6 +57,12 @@ async function main(): Promise<void> {
     trades: async (limit) => engine.ledger.slice(-limit),
     rankings: async () => engine.walletRankings(),
   });
+
+  if (closing) {
+    const result = await engine.closeAll(config.manualCloseId);
+    closing = false;
+    log.info(`manual close ${config.manualCloseId}: ${result.closed} closed, ${result.skipped} skipped, realized $${result.pnlUsd.toFixed(2)}; ${Object.keys(engine.state.positions).length} remain open`);
+  }
 
   if (!config.enabled) {
     log.info("COPYBOT_ENABLED=false — HTTP server only");

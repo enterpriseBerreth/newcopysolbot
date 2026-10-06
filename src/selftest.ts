@@ -326,6 +326,42 @@ async function main(): Promise<void> {
   const tinyPnl = tinyEngine.ledger.reduce((sum, trade) => sum + (trade.pnlUsd ?? 0), 0);
   expect(approx(tinyEngine.capital(), 100 + tinyPnl), "partial exits preserve the capital accounting invariant");
 
+  const manualDir = `${dataDir}-manual`;
+  const manualPrices = new Map(prices);
+  manualPrices.set(MINT_B, { priceUsd: 1, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
+  const manualAlerts: string[] = [];
+  const manualOpts = {
+    startingBudgetUsd: 100,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: manualDir,
+    pairProvider: async (mint: string) => manualPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+    notifier: { send: async (text: string) => void manualAlerts.push(text) },
+  };
+  const manual = new PaperEngine(manualOpts);
+  await manual.load();
+  await manual.onTrades([ev({ signature: "MANUAL_A", mint: MINT_A })]);
+  await manual.onTrades([ev({ signature: "MANUAL_B", mint: MINT_B })]);
+  manualPrices.set(MINT_A, { priceUsd: 2, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  manualPrices.delete(MINT_B);
+  const firstClose = await manual.closeAll("close-1");
+  expect(firstClose.closed === 1 && firstClose.skipped === 1 && Object.keys(manual.state.positions).length === 1, "manual close sells priced positions and leaves unpriced positions open");
+  expect(manual.ledger.filter((trade) => trade.reason === "manual close").length === 1 && Boolean(manualAlerts[0]?.includes("TRADE CLOSED — MANUAL CLOSE")), "manual close records sale and sends closed-trade alert");
+  const restoredManual = new PaperEngine(manualOpts);
+  await restoredManual.load();
+  await restoredManual.closeAll("close-1");
+  expect(restoredManual.ledger.filter((trade) => trade.reason === "manual close").length === 1 && restoredManual.state.lastManualCloseId === "close-1", "manual close cannot repeat after restart with the same operation id");
+  manualPrices.set(MINT_B, { priceUsd: 0.5, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
+  const secondClose = await restoredManual.closeAll("close-2");
+  const manualPnl = restoredManual.ledger.reduce((sum, trade) => sum + (trade.pnlUsd ?? 0), 0);
+  expect(secondClose.closed === 1 && secondClose.skipped === 0 && Object.keys(restoredManual.state.positions).length === 0, "new operation id closes previously unpriced position");
+  expect(approx(restoredManual.capital(), 100 + manualPnl) && manualAlerts.length === 2, "manual liquidation reconciles cash and notifies for both winning and losing closes");
+
   console.log("── watcher cursor ──");
 
   const fetched: TradeEvent[] = [];
@@ -442,6 +478,7 @@ async function main(): Promise<void> {
   await fs.rm(dataDir, { recursive: true, force: true });
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-manual`, { recursive: true, force: true });
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

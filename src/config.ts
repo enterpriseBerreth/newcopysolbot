@@ -57,6 +57,7 @@ export const config = {
     .filter((h) => Number.isInteger(h) && h >= 0 && h <= 23),
 
   dataDir: str("DATA_DIR", "data"),
+  manualCloseId: str("MANUAL_CLOSE_ID", ""),
 
   telegramBotToken: str("TELEGRAM_BOT_TOKEN", ""),
   telegramChatId: str("TELEGRAM_CHAT_ID", ""),

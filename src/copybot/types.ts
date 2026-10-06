@@ -53,6 +53,7 @@ export interface PaperState {
   lastSigByWallet: Record<string, string>;
   /** Bounded ring of processed `${wallet}:${signature}` keys. */
   processedSigs: string[];
+  lastManualCloseId?: string;
 }
 
 export interface PairInfo {

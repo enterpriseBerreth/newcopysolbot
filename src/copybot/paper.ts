@@ -65,6 +65,7 @@ export class PaperEngine {
         positions: saved.positions ?? {},
         lastSigByWallet: saved.lastSigByWallet ?? {},
         processedSigs: saved.processedSigs ?? [],
+        lastManualCloseId: saved.lastManualCloseId,
       };
       log.info(
         `restored: cash $${this.state.cashUsd.toFixed(2)}, ${Object.keys(this.state.positions).length} position(s), ` +
@@ -312,6 +313,32 @@ export class PaperEngine {
     );
   }
 
+  async closeAll(id: string): Promise<{ closed: number; skipped: number; pnlUsd: number }> {
+    if (!id) throw new Error("manual close requires a nonempty operation id");
+    const next = this.processing.then(async () => {
+      if (this.state.lastManualCloseId === id) return { closed: 0, skipped: 0, pnlUsd: 0 };
+      let closed = 0;
+      let skipped = 0;
+      const capitalBefore = this.capital();
+      for (const pos of Object.values(this.state.positions)) {
+        const info = await this.pair(pos.mint);
+        if (!info?.priceUsd) {
+          skipped++;
+          log.warn(`manual close: no price for ${pos.symbol} (${pos.mint}); position remains open`);
+          continue;
+        }
+        await this.forceClose(pos, "manual close", info.priceUsd);
+        closed++;
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+      }
+      this.state.lastManualCloseId = id;
+      await this.save();
+      return { closed, skipped, pnlUsd: this.capital() - capitalBefore };
+    });
+    this.processing = next.then(() => undefined, (err) => log.error(`manual close failed: ${String(err)}`));
+    return next;
+  }
+
   // ── stop-loss marking ────────────────────────────────────────
 
   /** Re-mark every open position; force-close anything past the stop loss. */
@@ -336,9 +363,9 @@ export class PaperEngine {
     if (stops.length > 0) await this.save();
   }
 
-  private async forceClose(pos: Position, reason: string): Promise<void> {
-    const info = await this.pair(pos.mint);
-    const fillPrice = (info?.priceUsd ?? 0) * (1 - this.opts.exitSlippagePct / 100);
+  private async forceClose(pos: Position, reason: string, marketPrice?: number): Promise<void> {
+    const price = marketPrice ?? (await this.pair(pos.mint))?.priceUsd ?? 0;
+    const fillPrice = price * (1 - this.opts.exitSlippagePct / 100);
     if (!fillPrice) {
       log.warn(`stop-loss on ${pos.symbol}: no mark price; retry next cycle`);
       return;
@@ -369,12 +396,13 @@ export class PaperEngine {
       signature: "",
     };
     await this.appendLedger(trade);
+    await this.save();
     log.warn(
-      `STOP-LOSS ${pos.symbol}: exited for $${proceeds.toFixed(2)} (PnL $${pnlUsd.toFixed(2)} / ${pnlPct.toFixed(1)}%), ` +
+      `${reason.toUpperCase()} ${pos.symbol}: exited for $${proceeds.toFixed(2)} (PnL $${pnlUsd.toFixed(2)} / ${pnlPct.toFixed(1)}%), ` +
         `cash $${this.state.cashUsd.toFixed(2)}`,
     );
     await this.notifier.send(
-      `TRADE CLOSED — STOP LOSS ${pos.symbol}\n` +
+      `TRADE CLOSED — ${reason.toUpperCase()} ${pos.symbol}\n` +
         `Wallet: ${pos.wallet}\n` +
         `Token: ${pos.symbol} (${pos.mint})\n` +
         `Exit: 100% of position @ $${fillPrice.toPrecision(6)}\n` +
