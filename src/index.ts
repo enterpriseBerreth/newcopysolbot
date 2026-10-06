@@ -5,6 +5,7 @@ import { PaperEngine } from "./copybot/paper.js";
 import { SolRpc } from "./copybot/rpc.js";
 import { TelegramNotifier } from "./copybot/notifier.js";
 import { WalletWatcher, short } from "./copybot/watcher.js";
+import { WsTradeWatcher } from "./copybot/ws.js";
 import { startServer } from "./server.js";
 import type { Position } from "./copybot/types.js";
 
@@ -66,6 +67,12 @@ async function main(): Promise<void> {
   );
   await watcher.start();
 
+  // Push-based capture when a WS endpoint is configured; polling stays on as fallback.
+  const wsWatcher = config.wsUrl
+    ? new WsTradeWatcher(config.wsUrl, rpc, config.trackedWallets, (events) => engine.onTrades(events))
+    : null;
+  wsWatcher?.start();
+
   // Stop-loss marking loop.
   const markTimer = setInterval(() => {
     engine.markAll().catch((err) => log.error(`markAll failed: ${String(err)}`));
@@ -91,6 +98,7 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     log.info(`${signal} received; saving state…`);
     watcher.stop();
+    wsWatcher?.stop();
     await engine.save();
     server.close();
     process.exit(0);

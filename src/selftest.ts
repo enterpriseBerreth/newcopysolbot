@@ -11,7 +11,10 @@ import { extractTrades } from "./copybot/decoder.js";
 import { PaperEngine } from "./copybot/paper.js";
 import type { NotifierLike } from "./copybot/notifier.js";
 import type { JsonTransaction, JsonTokenBalance } from "./copybot/rpc.js";
+import { sleep } from "./copybot/rpc.js";
 import { WalletWatcher } from "./copybot/watcher.js";
+import { WsTradeWatcher } from "./copybot/ws.js";
+import type { WsLike, WsFactory } from "./copybot/ws.js";
 import type { PairInfo, TradeEvent } from "./copybot/types.js";
 
 let passed = 0;
@@ -300,6 +303,52 @@ async function main(): Promise<void> {
   await (watcher as unknown as { pollWallet(w: string): Promise<void> }).pollWallet(WALLET);
   expect(fetched.length === 1 && fetched[0]!.signature === "S2", "cursor skips already-seen sigs, processes only S2");
   expect(fetched[0]!.side === "buy", "watcher emitted decoded buy from S2");
+
+  console.log("── ws push watcher ──");
+
+  // Fake WS: capture the created instance so the test can drive its lifecycle.
+  let wsInstance: WsLike | null = null;
+  const sentFrames: string[] = [];
+  const fakeWsFactory: WsFactory = () => {
+    const obj: WsLike = {
+      send: (data) => void sentFrames.push(data),
+      close: () => {},
+      onopen: null,
+      onclose: null,
+      onerror: null,
+      onmessage: null,
+    };
+    wsInstance = obj;
+    return obj;
+  };
+  const wsFetched: TradeEvent[] = [];
+  const wsRpc = {
+    async getTransaction(sig: string) {
+      if (sig === "WSBUY") return makeTx({ sig, programs: [DEX], tokens: [{ mint: MINT_A, pre: 0, post: 100 }] });
+      if (sig === "WSFAIL") return makeTx({ sig, err: { InstructionError: [0, 0] }, programs: [DEX] });
+      return null;
+    },
+  };
+  const wsWatcher = new WsTradeWatcher(
+    "wss://fake",
+    wsRpc as never,
+    [WALLET],
+    async (events) => void wsFetched.push(...events),
+    fakeWsFactory,
+  );
+  wsWatcher.start();
+  expect(!!wsInstance, "fake ws instance created");
+  wsInstance!.onopen!();
+  expect(sentFrames.length === 1 && sentFrames[0]!.includes("logsSubscribe") && sentFrames[0]!.includes(WALLET), "subscribes tracked wallets via mentions on open");
+  // Failed tx notification -> ignored.
+  wsInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { result: { value: { signature: "WSFAIL", err: { e: 1 } } } } }) });
+  // Real buy notification -> fetched + decoded.
+  wsInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { result: { value: { signature: "WSBUY", err: null } } } }) });
+  // Duplicate of the same signature -> deduped in the queue.
+  wsInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { result: { value: { signature: "WSBUY", err: null } } } }) });
+  await sleep(100);
+  expect(wsFetched.length === 1 && wsFetched[0]!.signature === "WSBUY" && wsFetched[0]!.side === "buy", "ws push decodes the trade and dedups duplicate notifications");
+  wsWatcher.stop();
 
   await fs.rm(dataDir, { recursive: true, force: true });
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });

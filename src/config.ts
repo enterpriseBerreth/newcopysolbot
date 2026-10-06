@@ -18,6 +18,9 @@ function bool(key: string, def: boolean): boolean {
 
 export const config = {
   rpcUrl: str("SOLANA_RPC_URL", "https://solana-rpc.publicnode.com"),
+  // WebSocket endpoint for push-based capture (e.g. Helius wss://...?api-key=...).
+  // Empty = polling only.
+  wsUrl: str("SOLANA_WS_URL", ""),
   port: num("PORT", 3000),
   pollIntervalMs: num("POLL_INTERVAL_MS", 15000),
   enabled: bool("COPYBOT_ENABLED", true),
