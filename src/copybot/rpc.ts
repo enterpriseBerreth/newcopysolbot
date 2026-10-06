@@ -41,9 +41,13 @@ export class SolRpc {
           if (res.status >= 500) throw new Error(`rpc ${label} -> HTTP ${res.status}`);
           if (!res.ok) throw new Error(`rpc ${label} -> HTTP ${res.status}`);
           const json = (await res.json()) as { result?: T; error?: { message: string } } | unknown[];
-          if (Array.isArray(json)) return json as T;
+          if (Array.isArray(json)) {
+            this.minIntervalMs = Math.max(350, Math.floor(this.minIntervalMs * 0.9));
+            return json as T;
+          }
           if (json.error) throw new Error(`rpc ${label} -> ${json.error.message}`);
           if (json.result === undefined) throw new Error(`rpc ${label} -> empty result`);
+          this.minIntervalMs = Math.max(350, Math.floor(this.minIntervalMs * 0.9));
           return json.result;
         } catch (err) {
           lastErr = err;

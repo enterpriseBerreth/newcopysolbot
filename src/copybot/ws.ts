@@ -7,7 +7,7 @@ import type { TradeEvent } from "./types.js";
 const log = createLogger("ws");
 
 const MAX_QUEUE = 500;
-const BATCH_SIZE = 10;
+const BATCH_SIZE = 3;
 const MAX_BACKOFF_MS = 30_000;
 
 export interface WsLike {

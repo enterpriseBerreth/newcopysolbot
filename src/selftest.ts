@@ -396,14 +396,17 @@ async function main(): Promise<void> {
   };
   const wsFetched: TradeEvent[] = [];
   let batchCalls = 0;
+  const batchSizes: number[] = [];
   const wsRpc = {
     async getTransaction(sig: string) {
-      if (sig === "WSBUY") return makeTx({ sig, programs: [DEX], tokens: [{ mint: MINT_A, pre: 0, post: 100 }] });
+      if (sig.startsWith("WSBUY")) return makeTx({ sig, programs: [DEX], tokens: [{ mint: MINT_A, pre: 0, post: 100 }] });
       if (sig === "WSFAIL") return makeTx({ sig, err: { InstructionError: [0, 0] }, programs: [DEX] });
       return null;
     },
     async getTransactions(signatures: string[]) {
       batchCalls++;
+      batchSizes.push(signatures.length);
+      await sleep(5);
       return Promise.all(signatures.map((sig) => this.getTransaction(sig)));
     },
   };
@@ -429,6 +432,11 @@ async function main(): Promise<void> {
   await sleep(100);
   expect(wsFetched.length === 1 && wsFetched[0]!.signature === "WSBUY" && wsFetched[0]!.side === "buy", "ws push decodes the trade and dedups duplicate notifications");
   expect(batchCalls === 1 && wsWatcher.fetchedTransactions === 1, "ws transaction processing uses batched RPC fetch");
+  for (const sig of ["WSBUY2", "WSBUY3", "WSBUY4"]) {
+    wsInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { result: { value: { signature: sig, err: null } } } }) });
+  }
+  await sleep(100);
+  expect(wsFetched.length === 4 && batchSizes.join(",") === "1,1,2" && wsWatcher.pending === 0, `ws fetches queued transactions in batches and drains them (${batchSizes.join(",")})`);
   wsWatcher.stop();
 
   await fs.rm(dataDir, { recursive: true, force: true });
