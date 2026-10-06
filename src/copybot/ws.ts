@@ -68,14 +68,18 @@ export class WsTradeWatcher {
 
     ws.onopen = () => {
       log.info(`connected; subscribing ${this.wallets.length} wallet(s) via logsSubscribe`);
-      ws.send(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: this.nextId++,
-          method: "logsSubscribe",
-          params: [{ mentions: this.wallets }, { commitment: "confirmed" }],
-        }),
-      );
+      // One subscription per wallet: Solana RPCs (incl. Helius) accept only a
+      // single address per logsSubscribe call, but many calls per connection.
+      for (const w of this.wallets) {
+        ws.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: this.nextId++,
+            method: "logsSubscribe",
+            params: [{ mentions: [w] }, { commitment: "confirmed" }],
+          }),
+        );
+      }
       this.backoffMs = 1000;
     };
 
