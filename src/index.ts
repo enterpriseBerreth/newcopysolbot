@@ -75,8 +75,9 @@ async function main(): Promise<void> {
     () => !wsWatcher?.healthy,
     (wallet, signature) => Boolean(wsWatcher?.hasSeen(signature) || engine.hasProcessed(wallet, signature)),
   );
-  wsWatcher?.start();
   await watcher.start();
+  await engine.save();
+  wsWatcher?.start();
 
   // Stop-loss marking loop.
   let marking = false;
