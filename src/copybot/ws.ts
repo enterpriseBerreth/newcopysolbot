@@ -39,6 +39,25 @@ export class WsTradeWatcher {
   private draining = false;
   private backoffMs = 1000;
   private nextId = 1;
+  private subscriptions = new Set<number>();
+  private recent = new Set<string>();
+  private dropped = 0;
+
+  get droppedNotifications(): number {
+    return this.dropped;
+  }
+
+  get healthy(): boolean {
+    return this.subscriptions.size === this.wallets.length && !this.stopped;
+  }
+
+  get pending(): number {
+    return this.queue.length + (this.draining ? 1 : 0);
+  }
+
+  hasSeen(signature: string): boolean {
+    return this.recent.has(signature);
+  }
 
   constructor(
     private url: string,
@@ -63,6 +82,7 @@ export class WsTradeWatcher {
 
   private connect(): void {
     if (this.stopped) return;
+    this.subscriptions.clear();
     const ws = this.wsFactory(this.url);
     this.ws = ws;
 
@@ -86,12 +106,19 @@ export class WsTradeWatcher {
     ws.onmessage = (ev: { data: unknown }) => {
       try {
         const msg = JSON.parse(String(ev.data)) as {
+          id?: number;
+          result?: number;
           method?: string;
           error?: unknown;
           params?: { result?: { value?: { signature?: string; err?: unknown } } };
         };
         if (msg.error) {
           log.warn(`ws rpc error: ${JSON.stringify(msg.error)}`);
+          return;
+        }
+        if (typeof msg.id === "number" && typeof msg.result === "number") {
+          this.subscriptions.add(msg.id);
+          if (this.healthy) log.info(`all ${this.wallets.length} wallet subscriptions confirmed`);
           return;
         }
         if (msg.method !== "logsNotification") return;
@@ -112,7 +139,8 @@ export class WsTradeWatcher {
     };
 
     ws.onclose = () => {
-      if (this.stopped) return;
+      if (this.ws !== ws || this.stopped) return;
+      this.subscriptions.clear();
       log.warn(`ws closed; reconnecting in ${this.backoffMs}ms`);
       setTimeout(() => this.connect(), this.backoffMs);
       this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
@@ -120,9 +148,12 @@ export class WsTradeWatcher {
   }
 
   private enqueue(sig: string): void {
-    if (this.queued.has(sig)) return;
+    if (this.queued.has(sig) || this.recent.has(sig)) return;
     if (this.queue.length >= MAX_QUEUE) {
-      log.warn(`ws queue full (${MAX_QUEUE}); oldest backlog left to polling fallback`);
+      this.dropped++;
+      if (this.dropped === 1 || this.dropped % 100 === 0) {
+        log.warn(`ws queue full (${MAX_QUEUE}); ${this.dropped} notifications dropped; provider throughput cannot keep up`);
+      }
       return;
     }
     this.queued.add(sig);
@@ -142,6 +173,10 @@ export class WsTradeWatcher {
             const events: TradeEvent[] = [];
             for (const w of this.wallets) events.push(...extractTrades(tx, w));
             if (events.length > 0) await this.onTrades(events);
+            this.recent.add(sig);
+            if (this.recent.size > 2000) this.recent.delete(this.recent.values().next().value!);
+          } else {
+            log.warn(`transaction ${short(sig)} unavailable; polling will retry`);
           }
         } catch (err) {
           log.warn(`fetch ${short(sig)} failed: ${String(err)}`);

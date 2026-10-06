@@ -4,8 +4,8 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 
 ## How it works
 
-1. **Wallet watching** — polls `getSignaturesForAddress` for each tracked wallet and fetches each new transaction.
-2. **Trade detection** — balance-diff decoding: any mint whose balance changed for the tracked wallet is a trade event. This works across every DEX/aggregator (Raydium, Pump.fun, Jupiter, Meteora, Orca, …) without per-DEX parsing. Plain transfers (airdrops, payments) are ignored: the tx must touch a known DEX program.
+1. **Wallet watching** — subscribes to each wallet over Solana WebSocket when configured; HTTP polling runs when subscriptions are unavailable. Every notification still needs an HTTP transaction fetch, so RPC quotas and backlog can cause missed trades.
+2. **Trade detection** — balance-diff decoding for known DEX programs (Raydium, Pump.fun, Jupiter, Meteora, Orca, etc.). Plain transfers without a known DEX program are ignored.
 3. **Copy sizing** — our entry is **1% of the copied wallet's trade notional** (they buy $1,400 → we enter $14; they buy $100 → we enter $1). Trades where the wallet spends **less than $50** are skipped.
 4. **Exits mirrored** — when a wallet sells X% of its bag, we sell X% of our position; every subsequent buy/sell is mirrored proportionally, always at the 1% clip. Profits refill the paper cash balance.
 5. **Realistic fills** — when the wallet's swap moved native SOL, the wallet's actual fill price is derived from the SOL leg (SOL moved × SOL price ÷ tokens) and used as our paper fill ±1% slippage, so PnL reflects copying at their price rather than a late market mark. Token↔token swaps and implausible attributions fall back to the DexScreener mark.
@@ -45,7 +45,7 @@ Full list in `env.template`.
 
 ## Persistence
 
-State lives in `DATA_DIR` (default `data/`): `positions-snapshot.json` (cash, positions, wallet cursors) and `paper-trades.jsonl` (append-only ledger, rebuilt into memory on boot). Note: Railway's filesystem is ephemeral across deploys — the paper account resets on redeploys unless you add a volume mounted at `DATA_DIR`.
+State lives in `DATA_DIR`: `positions-snapshot.json` (cash, positions, wallet cursors) and `paper-trades.jsonl` (append-only ledger, rebuilt on boot). On Railway, `DATA_DIR=/app/data` is mounted on the persistent volume. Without a volume, the paper account resets on deploy.
 
 ## Quick start
 
@@ -67,6 +67,7 @@ npm start
 
 ## Limitations
 
-- Static/paper only: fills use DexScreener prices with a fixed slippage haircut; no MEV, taxes or honey-pot simulation.
-- Balance-diff detection can misread exotic transfers that route through a DEX program; the $50 notional filter keeps the damage small.
-- Wallet trade notional is estimated as `token amount × current price`, which can drift from the wallet's actual fill for fast-moving tokens.
+- Paper fills estimate the wallet's SOL-denominated fill where unambiguous; otherwise they use DexScreener's current quote. They do not model MEV, swap fees, token taxes, transfer restrictions or market impact.
+- WebSocket notifications are not transaction data: each still requires an HTTP fetch. A sustained 429, subscription outage or full queue means some fast-wallet trades will be missed; `/health` reports `wsHealthy`, `wsPending` and `wsDropped` so coverage is not assumed.
+- Balance-diff detection can misread exotic transfers through a known DEX program; trades on unlisted programs and tokens with no price cannot be copied.
+- High-volume wallet coverage requires enough provider capacity for transaction fetches, not just WebSocket subscriptions.

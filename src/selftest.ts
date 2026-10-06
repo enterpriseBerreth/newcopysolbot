@@ -124,6 +124,14 @@ async function main(): Promise<void> {
     tokens: [{ mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", pre: 0, post: 500 }],
   });
   expect(extractTrades(quoteTx, WALLET).length === 0, "stablecoin-only change is not copied");
+  const multiTx = makeTx({
+    sig: "MULTI",
+    programs: [DEX],
+    solDeltaLamports: -1e9,
+    tokens: [{ mint: MINT_A, pre: 0, post: 100 }, { mint: MINT_B, pre: 0, post: 200 }],
+  });
+  const multiEvents = extractTrades(multiTx, WALLET);
+  expect(multiEvents.length === 2 && multiEvents.every((event) => event.solDelta === 0), "multiple tokens cannot each claim the full SOL spend");
 
   console.log("── engine ──");
 
@@ -253,7 +261,12 @@ async function main(): Promise<void> {
   });
   await engine2.load();
   expect(engine2.ledger.length === engine.ledger.length, "ledger rebuilt from disk on restart");
-  expect(engine2.state.processedSigs.includes(`${WALLET}:E1`), "processed-sig dedup survives restart");
+  expect(engine2.state.processedSigs.includes(`${WALLET}:E1:${MINT_A}`), "processed trade dedup survives restart");
+  const ledgerCount = engine2.ledger.length;
+  await engine2.onTrades([ev({ signature: "E1" })]);
+  expect(engine2.ledger.length === ledgerCount, "replayed wallet/mint trade cannot double-spend after restart");
+  await engine2.onTrades(multiEvents);
+  expect(engine2.state.processedSigs.includes(`${WALLET}:MULTI:${MINT_A}`) && engine2.state.processedSigs.includes(`${WALLET}:MULTI:${MINT_B}`), "all token mints in one signature are processed");
 
   // 8) Budget guard: a buy the account cannot afford is skipped entirely.
   const poorSent: string[] = [];
@@ -267,6 +280,7 @@ async function main(): Promise<void> {
     exitSlippagePct: 1,
     stopLossPct: 40,
     dataDir: poorDir,
+    trackedWallets: [WALLET, "InactiveWallet"],
     pairProvider: async (mint) => prices.get(mint) ?? null,
     solPriceProvider: async () => 10,
     notifier: { send: async (t) => void poorSent.push(t) },
@@ -276,6 +290,26 @@ async function main(): Promise<void> {
   expect(!poorEngine.state.positions[`${WALLET}:${MINT_A}`], "unaffordable buy is skipped entirely");
   expect(approx(poorEngine.state.cashUsd, 0.5, 1e-9), "cash untouched when skipping unaffordable buy");
   expect(poorSent.length === 0, "no alert for skipped entry");
+  expect((await poorEngine.walletRankings()).length === 2, "rankings include wallets with no paper trades");
+  const tinyDir = `${dataDir}-tiny`;
+  const tinyEngine = new PaperEngine({
+    startingBudgetUsd: 100,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: tinyDir,
+    pairProvider: async (mint) => prices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await tinyEngine.load();
+  await tinyEngine.onTrades([ev({ signature: "TINY_BUY" })]);
+  await tinyEngine.onTrades([ev({ signature: "TINY_SELL", side: "sell", tokenDelta: 99.999, remainingTokens: 0.001 })]);
+  expect(Boolean(tinyEngine.state.positions[`${WALLET}:${MINT_A}`]), "tiny residual after partial exit retains cost basis");
+  const tinyPnl = tinyEngine.ledger.reduce((sum, trade) => sum + (trade.pnlUsd ?? 0), 0);
+  expect(approx(tinyEngine.capital(), 100 + tinyPnl), "partial exits preserve the capital accounting invariant");
 
   console.log("── watcher cursor ──");
 
@@ -303,6 +337,30 @@ async function main(): Promise<void> {
   await (watcher as unknown as { pollWallet(w: string): Promise<void> }).pollWallet(WALLET);
   expect(fetched.length === 1 && fetched[0]!.signature === "S2", "cursor skips already-seen sigs, processes only S2");
   expect(fetched[0]!.side === "buy", "watcher emitted decoded buy from S2");
+  let failOnce = true;
+  const cursor = { [WALLET]: "S1" };
+  const retryWatcher = new WalletWatcher(
+    {
+      getSignaturesForAddress: fakeRpc.getSignaturesForAddress,
+      async getTransaction(sig: string) {
+        if (sig === "S2" && failOnce) {
+          failOnce = false;
+          throw new Error("temporary rate limit");
+        }
+        return fakeRpc.getTransaction(sig);
+      },
+    } as never,
+    [WALLET],
+    async () => {},
+    1000,
+    cursor,
+  );
+  try {
+    await (retryWatcher as unknown as { pollWallet(w: string): Promise<void> }).pollWallet(WALLET);
+  } catch {}
+  expect(cursor[WALLET] === "S1", "failed transaction does not advance wallet cursor");
+  await (retryWatcher as unknown as { pollWallet(w: string): Promise<void> }).pollWallet(WALLET);
+  expect(cursor[WALLET] === "S3", "retry processes failed transaction and advances cursor");
 
   console.log("── ws push watcher ──");
 
@@ -340,6 +398,8 @@ async function main(): Promise<void> {
   expect(!!wsInstance, "fake ws instance created");
   wsInstance!.onopen!();
   expect(sentFrames.length === 1 && sentFrames[0]!.includes("logsSubscribe") && sentFrames[0]!.includes(WALLET), "subscribes tracked wallets via mentions on open");
+  wsInstance!.onmessage!({ data: JSON.stringify({ id: 1, result: 123 }) });
+  expect(wsWatcher.healthy, "confirmed subscription makes WebSocket healthy");
   // Failed tx notification -> ignored.
   wsInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { result: { value: { signature: "WSFAIL", err: { e: 1 } } } } }) });
   // Real buy notification -> fetched + decoded.
@@ -352,6 +412,7 @@ async function main(): Promise<void> {
 
   await fs.rm(dataDir, { recursive: true, force: true });
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

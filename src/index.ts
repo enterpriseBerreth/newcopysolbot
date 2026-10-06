@@ -12,7 +12,7 @@ import type { Position } from "./copybot/types.js";
 const log = createLogger("index");
 
 async function main(): Promise<void> {
-  log.info(`COPY-SOL booting | rpc=${config.rpcUrl} | wallets=${config.trackedWallets.length} | clip=${config.clipPct}% | minWalletTrade=$${config.minWalletTradeUsd} | SL=-${config.stopLossPct}%`);
+  log.info(`COPY-SOL booting | rpc=${new URL(config.rpcUrl).host} | wallets=${config.trackedWallets.length} | clip=${config.clipPct}% | minWalletTrade=$${config.minWalletTradeUsd} | SL=-${config.stopLossPct}%`);
 
   const notifier = new TelegramNotifier(config.telegramBotToken, config.telegramChatId);
   const engine = new PaperEngine({
@@ -24,9 +24,11 @@ async function main(): Promise<void> {
     exitSlippagePct: config.exitSlippagePct,
     stopLossPct: config.stopLossPct,
     dataDir: config.dataDir,
+    trackedWallets: config.trackedWallets,
     notifier,
   });
   await engine.load();
+  let wsWatcher: WsTradeWatcher | null = null;
 
   const server = startServer(config.port, {
     health: async () => ({
@@ -34,6 +36,9 @@ async function main(): Promise<void> {
       enabled: config.enabled,
       uptimeSec: Math.round(process.uptime()),
       wallets: config.trackedWallets.map((w) => short(w)),
+      wsHealthy: wsWatcher?.healthy ?? false,
+      wsPending: wsWatcher?.pending ?? 0,
+      wsDropped: wsWatcher?.droppedNotifications ?? 0,
     }),
     stats: async () => ({
       ...engine.summary(),
@@ -58,24 +63,29 @@ async function main(): Promise<void> {
   }
 
   const rpc = new SolRpc(config.rpcUrl);
+  wsWatcher = config.wsUrl
+    ? new WsTradeWatcher(config.wsUrl, rpc, config.trackedWallets, (events) => engine.onTrades(events))
+    : null;
   const watcher = new WalletWatcher(
     rpc,
     config.trackedWallets,
     (events) => engine.onTrades(events),
     config.pollIntervalMs,
     engine.state.lastSigByWallet,
+    () => !wsWatcher?.healthy,
+    (wallet, signature) => Boolean(wsWatcher?.hasSeen(signature) || engine.hasProcessed(wallet, signature)),
   );
+  wsWatcher?.start();
   await watcher.start();
 
-  // Push-based capture when a WS endpoint is configured; polling stays on as fallback.
-  const wsWatcher = config.wsUrl
-    ? new WsTradeWatcher(config.wsUrl, rpc, config.trackedWallets, (events) => engine.onTrades(events))
-    : null;
-  wsWatcher?.start();
-
   // Stop-loss marking loop.
+  let marking = false;
   const markTimer = setInterval(() => {
-    engine.markAll().catch((err) => log.error(`markAll failed: ${String(err)}`));
+    if (marking) return;
+    marking = true;
+    engine.markAll()
+      .catch((err) => log.error(`markAll failed: ${String(err)}`))
+      .finally(() => { marking = false; });
   }, config.markIntervalMs);
   markTimer.unref();
 

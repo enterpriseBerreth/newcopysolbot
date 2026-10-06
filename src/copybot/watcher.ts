@@ -18,6 +18,8 @@ export class WalletWatcher {
     private pollMs: number,
     /** Shared, persisted: mutated in place so restarts skip old history. */
     private lastSigByWallet: Record<string, string>,
+    private shouldPoll: () => boolean = () => true,
+    private skipSig: (wallet: string, signature: string) => boolean = () => false,
   ) {}
 
   async start(): Promise<void> {
@@ -43,6 +45,7 @@ export class WalletWatcher {
       const started = Date.now();
       for (const w of this.wallets) {
         if (this.stopped) break;
+        if (!this.shouldPoll()) break;
         try {
           await this.pollWallet(w);
         } catch (err) {
@@ -63,7 +66,9 @@ export class WalletWatcher {
     const last = this.lastSigByWallet[wallet];
     let fresh: typeof sigs;
     if (!last) {
-      fresh = [];
+      this.lastSigByWallet[wallet] = sigs[0]!.signature;
+      log.info(`watching ${short(wallet)} from ${short(sigs[0]!.signature)} (history skipped)`);
+      return;
     } else {
       const idx = sigs.findIndex((s) => s.signature === last);
       if (idx === -1 && sigs.length >= SIGS_PER_POLL) {
@@ -75,20 +80,18 @@ export class WalletWatcher {
     }
     if (fresh.length === 0) return;
 
-    // sigs are newest-first; process oldest -> newest.
     const ordered = [...fresh].reverse();
-    this.lastSigByWallet[wallet] = sigs[0]!.signature;
-
-    const events: TradeEvent[] = [];
     for (const s of ordered) {
-      if (s.err) continue; // failed tx: no effective balance change
-      const tx = await this.rpc.getTransaction(s.signature);
-      if (!tx) continue;
-      events.push(...extractTrades(tx, wallet));
-    }
-    if (events.length > 0) {
-      log.info(`${short(wallet)}: ${ordered.length} new tx(s), ${events.length} trade event(s)`);
-      await this.onTrades(events);
+      if (!s.err && !this.skipSig(wallet, s.signature)) {
+        const tx = await this.rpc.getTransaction(s.signature);
+        if (!tx) throw new Error(`transaction ${short(s.signature)} not yet available`);
+        const events = extractTrades(tx, wallet);
+        if (events.length > 0) {
+          log.info(`${short(wallet)}: ${events.length} trade event(s) in ${short(s.signature)}`);
+          await this.onTrades(events);
+        }
+      }
+      this.lastSigByWallet[wallet] = s.signature;
     }
   }
 }

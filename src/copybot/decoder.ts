@@ -28,19 +28,21 @@ export function extractTrades(tx: JsonTransaction, wallet: string): TradeEvent[]
 
   const preSol = meta.preBalances[walletIdx] ?? 0;
   const postSol = meta.postBalances[walletIdx] ?? 0;
-  const solDelta = (postSol - preSol) / LAMPORTS_PER_SOL;
+  const fee = walletIdx === 0 ? meta.fee : 0;
+  const solDelta = (postSol - preSol + fee) / LAMPORTS_PER_SOL;
 
   const preByMint = sumWalletBalances(meta.preTokenBalances ?? [], wallet);
   const postByMint = sumWalletBalances(meta.postTokenBalances ?? [], wallet);
 
   const events: TradeEvent[] = [];
   const mints = new Set<string>([...preByMint.keys(), ...postByMint.keys()]);
-  for (const mint of mints) {
-    if (QUOTE_MINTS.has(mint)) continue; // never open positions in SOL/USDC/USDT
+  const changedTokens = [...mints].filter(
+    (mint) => !QUOTE_MINTS.has(mint) && (preByMint.get(mint) ?? 0) !== (postByMint.get(mint) ?? 0),
+  );
+  for (const mint of changedTokens) {
     const pre = preByMint.get(mint) ?? 0;
     const post = postByMint.get(mint) ?? 0;
     const delta = post - pre;
-    if (delta === 0) continue;
     events.push({
       wallet,
       signature: tx.transaction.signatures[0] ?? "",
@@ -49,7 +51,7 @@ export function extractTrades(tx: JsonTransaction, wallet: string): TradeEvent[]
       side: delta > 0 ? "buy" : "sell",
       tokenDelta: Math.abs(delta),
       remainingTokens: post,
-      solDelta,
+      solDelta: changedTokens.length === 1 ? solDelta : 0,
     });
   }
   return events;

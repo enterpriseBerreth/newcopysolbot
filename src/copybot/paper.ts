@@ -20,6 +20,7 @@ export interface EngineOpts {
   exitSlippagePct: number;
   stopLossPct: number;
   dataDir: string;
+  trackedWallets?: string[];
   pairProvider?: PairProvider;
   solPriceProvider?: () => Promise<number>;
   notifier?: NotifierLike;
@@ -40,6 +41,8 @@ export class PaperEngine {
   private ledgerFile: string;
   private snapshotFile: string;
   private seq = 0;
+  private processing: Promise<void> = Promise.resolve();
+  private completedTransactions = new Set<string>();
 
   constructor(private opts: EngineOpts) {
     this.state = defaultState(opts.startingBudgetUsd);
@@ -67,7 +70,8 @@ export class PaperEngine {
         `restored: cash $${this.state.cashUsd.toFixed(2)}, ${Object.keys(this.state.positions).length} position(s), ` +
           `${Object.keys(this.state.lastSigByWallet).length} wallet cursor(s)`,
       );
-    } catch {
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       log.info("no snapshot found; starting fresh paper account");
     }
     try {
@@ -75,15 +79,11 @@ export class PaperEngine {
       for (const line of raw.split("\n")) {
         const t = line.trim();
         if (!t) continue;
-        try {
-          this.ledger.push(JSON.parse(t) as PaperTrade);
-        } catch {
-          /* skip corrupt line */
-        }
+        this.ledger.push(JSON.parse(t) as PaperTrade);
       }
       log.info(`loaded ${this.ledger.length} ledger trade(s)`);
-    } catch {
-      /* no ledger yet */
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
   }
 
@@ -101,22 +101,30 @@ export class PaperEngine {
   // ── trade handling ───────────────────────────────────────────
 
   async onTrades(events: TradeEvent[]): Promise<void> {
-    let dirty = false;
+    const next = this.processing.then(() => this.processTrades(events));
+    this.processing = next.catch((err) => log.error(`processing failed: ${String(err)}`));
+    return next;
+  }
+
+  private async processTrades(events: TradeEvent[]): Promise<void> {
     for (const ev of events) {
-      const key = `${ev.wallet}:${ev.signature}`;
-      if (this.state.processedSigs.includes(key)) continue;
+      const key = `${ev.wallet}:${ev.signature}:${ev.mint}`;
+      if (this.state.processedSigs.includes(key) || this.state.processedSigs.includes(`${ev.wallet}:${ev.signature}`)) continue;
+      await this.handleTrade(ev);
       this.state.processedSigs.push(key);
       if (this.state.processedSigs.length > PROCESSED_SIG_RING_SIZE) {
         this.state.processedSigs.splice(0, this.state.processedSigs.length - PROCESSED_SIG_RING_SIZE);
       }
-      try {
-        await this.handleTrade(ev);
-      } catch (err) {
-        log.error(`handleTrade ${short(ev.wallet)} ${ev.mint.slice(0, 8)} failed: ${String(err)}`);
-      }
-      dirty = true;
+      await this.save();
     }
-    if (dirty) await this.save();
+    for (const ev of events) this.completedTransactions.add(`${ev.wallet}:${ev.signature}`);
+    if (this.completedTransactions.size > PROCESSED_SIG_RING_SIZE) {
+      this.completedTransactions.delete(this.completedTransactions.values().next().value!);
+    }
+  }
+
+  hasProcessed(wallet: string, signature: string): boolean {
+    return this.completedTransactions.has(`${wallet}:${signature}`);
   }
 
   private async handleTrade(ev: TradeEvent): Promise<void> {
@@ -268,7 +276,7 @@ export class PaperEngine {
     pos.qty -= sellQty;
     pos.costUsd -= costSold;
     this.state.cashUsd += proceeds;
-    if (pos.qty * fillPrice < 0.01) delete this.state.positions[key];
+    if (frac === 1) delete this.state.positions[key];
     const capitalAfter = this.capital();
 
     const trade: PaperTrade = {
@@ -308,6 +316,12 @@ export class PaperEngine {
 
   /** Re-mark every open position; force-close anything past the stop loss. */
   async markAll(): Promise<void> {
+    const next = this.processing.then(() => this.markPositions());
+    this.processing = next.catch((err) => log.error(`marking failed: ${String(err)}`));
+    return next;
+  }
+
+  private async markPositions(): Promise<void> {
     const stops: Position[] = [];
     for (const pos of Object.values(this.state.positions)) {
       const info = await this.pair(pos.mint);
@@ -415,7 +429,11 @@ export class PaperEngine {
       }
     }
 
-    const wallets = new Set<string>([...acc.keys(), ...Object.values(this.state.positions).map((p) => p.wallet)]);
+    const wallets = new Set<string>([
+      ...(this.opts.trackedWallets ?? []),
+      ...acc.keys(),
+      ...Object.values(this.state.positions).map((p) => p.wallet),
+    ]);
     const unrealized = new Map<string, number>();
     for (const pos of Object.values(this.state.positions)) {
       const info = await this.pair(pos.mint);

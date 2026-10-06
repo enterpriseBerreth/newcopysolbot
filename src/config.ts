@@ -60,7 +60,7 @@ export const config = {
 
   telegramBotToken: str("TELEGRAM_BOT_TOKEN", ""),
   telegramChatId: str("TELEGRAM_CHAT_ID", ""),
-  telegramTestOnBoot: bool("TELEGRAM_TEST_ON_BOOT", true),
+  telegramTestOnBoot: bool("TELEGRAM_TEST_ON_BOOT", false),
 
   logLevel: str("LOG_LEVEL", "info"),
 };
