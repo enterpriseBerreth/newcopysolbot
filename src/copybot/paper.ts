@@ -7,7 +7,7 @@ import type { PairProvider } from "./prices.js";
 import { getPairInfo, getSolPriceUsd } from "./prices.js";
 import { short } from "./watcher.js";
 import type { NotifierLike } from "./notifier.js";
-import type { PaperState, PaperTrade, Position, TradeEvent, WalletRankRow } from "./types.js";
+import type { PairInfo, PaperState, PaperTrade, Position, TradeEvent, WalletRankRow } from "./types.js";
 
 const log = createLogger("paper");
 
@@ -24,6 +24,16 @@ export interface EngineOpts {
   /** Wallets to observe without deploying capital: trades are decoded and
    *  logged, exits on pre-existing positions still mirror, but no new buys. */
   shadowWallets?: string[];
+  /** Skip entries into tokens with less DexScreener liquidity (USD). 0 disables. */
+  liquidityFloorUsd?: number;
+  /** Stop copying a wallet while cumulative realized PnL <= this. 0 disables. */
+  killSwitchPnlUsd?: number;
+  /** Win-rate kill needs >= this many closed sells. */
+  killSwitchMinSells?: number;
+  /** Win-rate kill fires below this win rate (with negative PnL). */
+  killSwitchMaxWinRate?: number;
+  /** Max accumulated position cost, as a multiple of the first clip. 0 disables. */
+  topUpCostCapMultiple?: number;
   pairProvider?: PairProvider;
   solPriceProvider?: () => Promise<number>;
   notifier?: NotifierLike;
@@ -47,12 +57,22 @@ export class PaperEngine {
   private processing: Promise<void> = Promise.resolve();
   private completedTransactions = new Set<string>();
   private shadow = new Set<string>();
+  private liquidityFloor: number;
+  private killPnl: number;
+  private killMinSells: number;
+  private killMaxWinRate: number;
+  private topUpCap: number;
 
   shadowTradesSkipped = 0;
 
   constructor(private opts: EngineOpts) {
     this.state = defaultState(opts.startingBudgetUsd);
     this.shadow = new Set(opts.shadowWallets ?? []);
+    this.liquidityFloor = opts.liquidityFloorUsd ?? 25_000;
+    this.killPnl = opts.killSwitchPnlUsd ?? -50;
+    this.killMinSells = opts.killSwitchMinSells ?? 20;
+    this.killMaxWinRate = opts.killSwitchMaxWinRate ?? 0.3;
+    this.topUpCap = opts.topUpCostCapMultiple ?? 2;
     this.pair = opts.pairProvider ?? getPairInfo;
     this.solPrice = opts.solPriceProvider ?? getSolPriceUsd;
     this.notifier = opts.notifier ?? { send: async () => {} };
@@ -152,7 +172,7 @@ export class PaperEngine {
       `${ev.side} ${ev.mint.slice(0, 8)}… fill $${fillRef.toPrecision(6)} ` +
         `(${derived ? "wallet-derived" : "market"}) notional $${walletNotional.toFixed(2)}`,
     );
-    if (ev.side === "buy") await this.copyBuy(ev, fillRef, info?.symbol ?? ev.mint.slice(0, 6), walletNotional);
+    if (ev.side === "buy") await this.copyBuy(ev, fillRef, info?.symbol ?? ev.mint.slice(0, 6), walletNotional, info);
     else await this.copySell(ev, fillRef, info?.symbol ?? ev.mint.slice(0, 6), walletNotional);
   }
 
@@ -196,16 +216,35 @@ export class PaperEngine {
     price: number,
     symbol: string,
     walletNotional: number,
+    info: PairInfo | null,
   ): Promise<void> {
+    if (this.isKilled(ev.wallet)) {
+      log.warn(`KILL-SWITCH skip buy: ${short(ev.wallet)} ${symbol} (wallet below PnL/win-rate threshold)`);
+      return;
+    }
     if (walletNotional < this.opts.minWalletTradeUsd) {
       log.info(
         `skip dust buy: ${short(ev.wallet)} ${symbol} notional $${walletNotional.toFixed(2)} < $${this.opts.minWalletTradeUsd}`,
       );
       return;
     }
+    if (this.liquidityFloor > 0 && (info?.liquidityUsd ?? 0) < this.liquidityFloor) {
+      log.warn(
+        `skip low-liquidity buy: ${short(ev.wallet)} ${symbol} pool $${(info?.liquidityUsd ?? 0).toFixed(0)} < floor $${this.liquidityFloor}`,
+      );
+      return;
+    }
     const ourUsd = (walletNotional * this.opts.clipPct) / 100;
     const key = `${ev.wallet}:${ev.mint}`;
     const existing = this.state.positions[key];
+
+    if (existing && this.topUpCap > 0 && existing.costUsd + ourUsd > existing.clipUsd * this.topUpCap) {
+      log.warn(
+        `skip top-up: ${short(ev.wallet)} ${symbol} would cost $${(existing.costUsd + ourUsd).toFixed(2)} ` +
+          `> cap ${this.topUpCap}x first clip $${existing.clipUsd.toFixed(2)}`,
+      );
+      return;
+    }
 
     if (!existing && Object.keys(this.state.positions).length >= this.opts.maxPositions) {
       log.warn(`max positions reached; skipped buy of ${symbol}`);
@@ -350,6 +389,38 @@ export class PaperEngine {
     });
     this.processing = next.then(() => undefined, (err) => log.error(`manual close failed: ${String(err)}`));
     return next;
+  }
+
+  // ── risk gates ───────────────────────────────────────────────
+
+  private walletStats(wallet: string): { realizedPnl: number; sells: number; wins: number } {
+    let realizedPnl = 0;
+    let sells = 0;
+    let wins = 0;
+    for (const t of this.ledger) {
+      if (t.wallet !== wallet || t.side !== "sell") continue;
+      sells++;
+      const pnl = t.pnlUsd ?? 0;
+      realizedPnl += pnl;
+      if (pnl > 0) wins++;
+    }
+    return { realizedPnl, sells, wins };
+  }
+
+  /** True while a wallet's trailing performance blocks new entries.
+   *  Stateless: re-evaluated per buy, so wallets auto-re-enable when their
+   *  realized PnL recovers (e.g. open positions exit profitably). */
+  isKilled(wallet: string): boolean {
+    const s = this.walletStats(wallet);
+    if (this.killPnl !== 0 && s.realizedPnl <= this.killPnl) return true;
+    if (this.killMinSells > 0 && s.sells >= this.killMinSells && s.realizedPnl < 0 && s.wins / s.sells < this.killMaxWinRate) {
+      return true;
+    }
+    return false;
+  }
+
+  killSwitchedWallets(): string[] {
+    return (this.opts.trackedWallets ?? []).filter((w) => this.isKilled(w)).map((w) => short(w));
   }
 
   // ── stop-loss marking ────────────────────────────────────────

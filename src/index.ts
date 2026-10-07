@@ -26,6 +26,11 @@ async function main(): Promise<void> {
     dataDir: config.dataDir,
     trackedWallets: config.trackedWallets,
     shadowWallets: config.shadowWallets,
+    liquidityFloorUsd: config.liquidityFloorUsd,
+    killSwitchPnlUsd: config.killSwitchPnlUsd,
+    killSwitchMinSells: config.killSwitchMinSells,
+    killSwitchMaxWinRate: config.killSwitchMaxWinRate,
+    topUpCostCapMultiple: config.topUpCostCapMultiple,
     notifier,
   });
   await engine.load();
@@ -40,6 +45,7 @@ async function main(): Promise<void> {
       lastManualCloseId: engine.state.lastManualCloseId ?? null,
       shadowWallets: config.shadowWallets.map((w) => short(w)),
       shadowTradesSkipped: engine.shadowTradesSkipped,
+      killSwitchedWallets: engine.killSwitchedWallets(),
       uptimeSec: Math.round(process.uptime()),
       wallets: config.trackedWallets.map((w) => short(w)),
       wsHealthy: wsWatcher?.healthy ?? false,

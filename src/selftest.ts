@@ -12,7 +12,7 @@ import { PaperEngine } from "./copybot/paper.js";
 import type { NotifierLike } from "./copybot/notifier.js";
 import type { JsonTransaction, JsonTokenBalance } from "./copybot/rpc.js";
 import { sleep } from "./copybot/rpc.js";
-import { WalletWatcher } from "./copybot/watcher.js";
+import { WalletWatcher, short } from "./copybot/watcher.js";
 import { WsTradeWatcher } from "./copybot/ws.js";
 import type { WsLike, WsFactory } from "./copybot/ws.js";
 import type { PairInfo, TradeEvent } from "./copybot/types.js";
@@ -166,6 +166,9 @@ async function main(): Promise<void> {
     exitSlippagePct: 1,
     stopLossPct: 40,
     dataDir,
+    // The cap has a dedicated engine below; the shared lifecycle tests
+    // top-up a position past the default multiple.
+    topUpCostCapMultiple: 0,
     pairProvider: async (mint) => prices.get(mint) ?? null,
     solPriceProvider: async () => 10,
     notifier,
@@ -388,6 +391,101 @@ async function main(): Promise<void> {
   const shadowRows = await shadowEngine.walletRankings();
   expect(shadowRows.length === 1 && shadowRows[0]!.dayTrades === 0, "shadow wallet stays in rankings with zero activity");
 
+  console.log("── risk gates ──");
+
+  const MINT_C = "TokenCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+  const gateAlerts: string[] = [];
+  const baseGateOpts = (dir: string) => ({
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: dir,
+    trackedWallets: [WALLET],
+    pairProvider: async (mint: string) => gatePrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+    notifier: { send: async (t: string) => void gateAlerts.push(t) } satisfies NotifierLike,
+  });
+
+  // PnL kill-switch: ten losing buy->sell rounds trip the threshold, a
+  // profitable exit on a held position auto-re-enables the wallet.
+  const gatePrices = new Map<string, PairInfo>(prices);
+  const killEngine = new PaperEngine({ ...baseGateOpts(`${dataDir}-kill`), killSwitchPnlUsd: -5, killSwitchMinSells: 0 });
+  await killEngine.load();
+  await killEngine.onTrades([ev({ signature: "K-A1" })]);
+  for (let i = 0; i < 10; i++) {
+    gatePrices.set(MINT_B, { priceUsd: 1, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
+    await killEngine.onTrades([ev({ signature: `K-B${i}`, mint: MINT_B })]);
+    gatePrices.set(MINT_B, { priceUsd: 0.5, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
+    await killEngine.onTrades([ev({ signature: `K-BS${i}`, mint: MINT_B, side: "sell", tokenDelta: 100, remainingTokens: 0 })]);
+  }
+  const killPnl = killEngine.ledger.filter((t) => t.side === "sell").reduce((s, t) => s + (t.pnlUsd ?? 0), 0);
+  expect(killPnl <= -5, `ten losing rounds push wallet past the kill threshold (realized ${killPnl.toFixed(2)})`);
+  const killCash = killEngine.state.cashUsd;
+  const killBuys = killEngine.ledger.filter((t) => t.side === "buy").length;
+  await killEngine.onTrades([ev({ signature: "K-BLOCKED", mint: MINT_B })]);
+  expect(killEngine.ledger.filter((t) => t.side === "buy").length === killBuys && approx(killEngine.state.cashUsd, killCash), "killed wallet cannot open new positions");
+  gatePrices.set(MINT_A, { priceUsd: 10, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await killEngine.onTrades([ev({ signature: "K-AS1", side: "sell", tokenDelta: 100, remainingTokens: 0 })]);
+  expect(!killEngine.isKilled(WALLET), "wallet auto-re-enables after realized PnL recovers");
+  await killEngine.onTrades([ev({ signature: "K-REENTRY", mint: MINT_B })]);
+  expect(killEngine.ledger.some((t) => t.side === "buy" && t.mint === MINT_B && t.signature === "K-REENTRY"), "re-enabled wallet can buy again");
+
+  // Win-rate kill: >= min sells, negative PnL, win rate below max.
+  const wrPrices = new Map<string, PairInfo>(prices);
+  const wrEngine = new PaperEngine({
+    ...baseGateOpts(`${dataDir}-winrate`),
+    killSwitchPnlUsd: -1000,
+    killSwitchMinSells: 3,
+    killSwitchMaxWinRate: 0.5,
+    pairProvider: async (mint: string) => wrPrices.get(mint) ?? null,
+  });
+  await wrEngine.load();
+  for (let i = 0; i < 3; i++) {
+    wrPrices.set(MINT_B, { priceUsd: 1, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
+    await wrEngine.onTrades([ev({ signature: `W-B${i}`, mint: MINT_B })]);
+    wrPrices.set(MINT_B, { priceUsd: 0.99, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
+    await wrEngine.onTrades([ev({ signature: `W-BS${i}`, mint: MINT_B, side: "sell", tokenDelta: 100, remainingTokens: 0 })]);
+  }
+  expect(wrEngine.isKilled(WALLET), "wallet with 0% win rate over the sell minimum is killed");
+  const wrBuys = wrEngine.ledger.filter((t) => t.side === "buy").length;
+  await wrEngine.onTrades([ev({ signature: "W-BLOCKED", mint: MINT_B })]);
+  expect(wrEngine.ledger.filter((t) => t.side === "buy").length === wrBuys, "win-rate-killed wallet cannot open positions");
+  expect(wrEngine.killSwitchedWallets().includes(short(WALLET)), "killSwitchedWallets reports the killed wallet");
+
+  // Liquidity floor.
+  const liqPrices = new Map<string, PairInfo>(prices);
+  const liqEngine = new PaperEngine({
+    ...baseGateOpts(`${dataDir}-liq`),
+    liquidityFloorUsd: 10_000,
+    pairProvider: async (mint: string) => liqPrices.get(mint) ?? null,
+  });
+  await liqEngine.load();
+  liqPrices.set(MINT_C, { priceUsd: 1, liquidityUsd: 5_000, symbol: "CCCC", dexId: "raydium", pairUrl: "" });
+  await liqEngine.onTrades([ev({ signature: "L-LOW", mint: MINT_C })]);
+  expect(!liqEngine.state.positions[`${WALLET}:${MINT_C}`], "buy into token below the liquidity floor is skipped");
+  liqPrices.set(MINT_C, { priceUsd: 1, liquidityUsd: 50_000, symbol: "CCCC", dexId: "raydium", pairUrl: "" });
+  await liqEngine.onTrades([ev({ signature: "L-OK", mint: MINT_C })]);
+  expect(Boolean(liqEngine.state.positions[`${WALLET}:${MINT_C}`]), "buy into token above the liquidity floor proceeds");
+
+  // Top-up cap: accumulated cost may reach but not exceed cap x first clip.
+  const capPrices = new Map<string, PairInfo>(prices);
+  const capEngine = new PaperEngine({
+    ...baseGateOpts(`${dataDir}-cap`),
+    topUpCostCapMultiple: 2,
+    pairProvider: async (mint: string) => capPrices.get(mint) ?? null,
+  });
+  await capEngine.load();
+  await capEngine.onTrades([ev({ signature: "C-1" })]);
+  await capEngine.onTrades([ev({ signature: "C-2", tokenDelta: 100, remainingTokens: 200 })]);
+  expect(approx(capEngine.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 2, 1e-9), "top-up reaching exactly the cap multiple is allowed");
+  await capEngine.onTrades([ev({ signature: "C-3", tokenDelta: 100, remainingTokens: 300 })]);
+  expect(approx(capEngine.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 2, 1e-9), "top-up beyond the cap multiple is skipped");
+  expect(capEngine.ledger.some((t) => t.side === "buy" && t.signature === "C-2") && !capEngine.ledger.some((t) => t.side === "buy" && t.signature === "C-3"), "only cap-compliant top-ups are ledgered");
+
   console.log("── watcher cursor ──");
 
   const fetched: TradeEvent[] = [];
@@ -543,6 +641,10 @@ async function main(): Promise<void> {
   await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-manual`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-shadow`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-kill`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-winrate`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-liq`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-cap`, { recursive: true, force: true });
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

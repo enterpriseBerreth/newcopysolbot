@@ -36,8 +36,9 @@ export const config = {
 
   // Copy sizing: our entry = CLIP_PCT% of the copied wallet's trade notional.
   clipPct: num("CLIP_PCT", 1),
-  // Ignore copied trades whose notional is below this.
-  minWalletTradeUsd: num("MIN_WALLET_TRADE_USD", 50),
+  // Ignore copied trades whose notional is below this. Data shows wallet trades
+  // under ~$200 are overwhelmingly unprofitable to copy; >=$500 trades are net positive.
+  minWalletTradeUsd: num("MIN_WALLET_TRADE_USD", 200),
 
   // Paper account.
   startingBudgetUsd: num("STARTING_BUDGET_USD", 10_000),
@@ -49,6 +50,22 @@ export const config = {
   // Close a position when it is down this many percent (0 disables).
   stopLossPct: num("STOP_LOSS_PCT", 40),
   markIntervalMs: num("MARK_INTERVAL_MS", 60_000),
+
+  // Risk gates:
+  // Skip entries into tokens whose deepest DexScreener pool has less liquidity
+  // than this (USD). 0 disables. Missing/zero liquidity counts as below floor.
+  liquidityFloorUsd: num("LIQUIDITY_FLOOR_USD", 25_000),
+  // Stop copying a wallet while its cumulative realized PnL is at or below
+  // this (USD). It auto-re-enables if realized PnL recovers (e.g. open
+  // positions exit profitably). 0 disables.
+  killSwitchPnlUsd: num("KILL_SWITCH_PNL_USD", -50),
+  // Win-rate kill: needs at least this many closed sells, a negative PnL,
+  // and a win rate below killSwitchMaxWinRate.
+  killSwitchMinSells: num("KILL_SWITCH_MIN_SELLS", 20),
+  killSwitchMaxWinRate: num("KILL_SWITCH_MAX_WIN_RATE", 0.3),
+  // Max accumulated cost per position, as a multiple of the first clip
+  // (blocks wallets from DCA-ing many times into one token). 0 disables.
+  topUpCostCapMultiple: num("TOP_UP_COST_CAP_MULTIPLE", 2),
 
   // Ranking report hours (UTC). Default = 12:00am and 12:00pm GMT-6.
   reportHoursUtc: str("REPORT_HOURS_UTC", "6,18")
