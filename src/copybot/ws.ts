@@ -11,7 +11,7 @@ const BATCH_SIZE = 3;
 const MAX_BACKOFF_MS = 30_000;
 /** Shadow wallets are observed via a 1-notification-per-wallet-per-window sample;
  *  their full firehose would starve the RPC budget of the copying wallets. */
-const SHADOW_SAMPLE_MS = 60_000;
+const SHADOW_SAMPLE_MS = 30_000;
 
 export interface WsLike {
   send(data: string): void;

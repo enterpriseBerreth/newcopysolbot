@@ -84,6 +84,10 @@ export const config = {
         .filter(Boolean),
     ),
   ],
+  // Virtual starting budget for the shadow simulation: each shadow wallet is
+  // copy-traded with the same strategy rules against this paper budget so we
+  // can evaluate promotion candidates without risking real paper capital.
+  shadowSimBudgetUsd: num("SHADOW_SIM_BUDGET_USD", 10_000),
 
   telegramBotToken: str("TELEGRAM_BOT_TOKEN", ""),
   telegramChatId: str("TELEGRAM_CHAT_ID", ""),

@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { LAMPORTS_PER_SOL } from "./copybot/constants.js";
 import { extractTrades } from "./copybot/decoder.js";
-import { PaperEngine } from "./copybot/paper.js";
+import { PaperEngine, splitShadowEvents } from "./copybot/paper.js";
 import type { NotifierLike } from "./copybot/notifier.js";
 import type { JsonTransaction, JsonTokenBalance } from "./copybot/rpc.js";
 import { sleep } from "./copybot/rpc.js";
@@ -636,6 +636,62 @@ async function main(): Promise<void> {
   expect(wsFetched.filter((e) => e.signature === "SHADOWS2" || e.signature === "SHADOWS3").length === 0 && shadowWsWatcher.shadowDroppedNotifications === 2, "subsequent shadow notifications within the sample window are dropped");
   shadowWsWatcher.stop();
 
+  console.log("── shadow sim ──");
+
+  const simDir = `${dataDir}-simsim`;
+  const simPrices = new Map(prices);
+  const simEngine = new PaperEngine({
+    startingBudgetUsd: 10_000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: simDir,
+    trackedWallets: [WALLET],
+    liquidityFloorUsd: 25_000,
+    topUpCostCapMultiple: 2,
+    killSwitchPnlUsd: 0,
+    killSwitchMinSells: 0,
+    pairProvider: async (mint) => simPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await simEngine.load();
+
+  const [simShadow, simRest] = splitShadowEvents([ev({ signature: "SIM_BUY" })], new Set([WALLET]));
+  expect(simShadow.length === 1 && simRest.length === 0, "splitShadowEvents routes shadow wallet events to the sim lane");
+  await simEngine.onTrades(simShadow);
+  expect(Boolean(simEngine.state.positions[`${WALLET}:${MINT_A}`]) && approx(simEngine.state.cashUsd, 10_000 - 1), "shadow sim deploys virtual capital on a copied entry");
+  const [simNone, simLive] = splitShadowEvents([ev({ signature: "LIVE_BUY", wallet: "LiveWallet1111111111111111111111111111" })], new Set([WALLET]));
+  expect(simNone.length === 0 && simLive.length === 1, "splitShadowEvents routes non-shadow events to the live lane");
+
+  simPrices.set(MINT_A, { priceUsd: 2, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await simEngine.onTrades([ev({ signature: "SIM_SELL", side: "sell", tokenDelta: 100, remainingTokens: 0 })]);
+  const simRealized = simEngine.ledger.filter((t) => t.side === "sell").reduce((s, t) => s + (t.pnlUsd ?? 0), 0);
+  expect(simRealized > 0 && approx(simEngine.capital(), 10_000 + simRealized, 1e-6), "shadow sim books realized PnL into its virtual capital");
+
+  // Kill switch disabled: a wallet below the default PnL threshold keeps trading.
+  simPrices.set(MINT_B, { priceUsd: 1, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
+  await simEngine.onTrades([ev({ signature: "SIM_LOSSBUY", mint: MINT_B })]);
+  simPrices.set(MINT_B, { priceUsd: 0.1, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
+  await simEngine.onTrades([ev({ signature: "SIM_LOSSELL", mint: MINT_B, side: "sell", tokenDelta: 50, remainingTokens: 0 })]);
+  simPrices.set(MINT_B, { priceUsd: 1, liquidityUsd: 500_000, symbol: "BBBB", dexId: "pumpfun", pairUrl: "" });
+  await simEngine.onTrades([ev({ signature: "SIM_REBUY", mint: MINT_B })]);
+  expect(simEngine.ledger.some((t) => t.side === "buy" && t.signature === "SIM_REBUY"), "shadow sim keeps trading with the kill switch disabled");
+
+  const simRows = await simEngine.walletRankings();
+  const simRow = simRows.find((r) => r.wallet === WALLET)!;
+  simRow.simPnlUsd = simRealized;
+  simRow.simTrades = 2;
+  simRow.simWins = 1;
+  simRow.simLosses = 1;
+  simRow.simUnrealizedUsd = 0;
+  const simReport = simEngine.formatRankings(simRows);
+  expect(simReport.includes("sim:") && simReport.includes("sim trades") && simReport.includes("sim open"), "formatRankings renders the shadow-sim line when sim fields are present");
+  const plainReport = simEngine.formatRankings(await engine.walletRankings());
+  expect(!plainReport.includes("sim:"), "formatRankings omits the sim line for non-sim rows");
+
   await fs.rm(dataDir, { recursive: true, force: true });
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });
@@ -645,6 +701,7 @@ async function main(): Promise<void> {
   await fs.rm(`${dataDir}-winrate`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-liq`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-cap`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-simsim`, { recursive: true, force: true });
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

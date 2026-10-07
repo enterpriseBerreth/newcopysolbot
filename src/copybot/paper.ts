@@ -594,6 +594,12 @@ export class PaperEngine {
         `   week:  ${fmtPnl(r.weekPnl)} | ${r.weekTrades} trades | ${r.weekPos} pos / ${r.weekNeg} neg`,
         `   open:  ${fmtPnl(r.unrealizedUsd)} unrealized`,
       );
+      if (r.simPnlUsd !== undefined) {
+        lines.push(
+          `   sim:   ${fmtPnl(r.simPnlUsd)} simulated | ${r.simTrades ?? 0} sim trades | ` +
+            `${r.simWins ?? 0} pos / ${r.simLosses ?? 0} neg | ${fmtPnl(r.simUnrealizedUsd ?? 0)} sim open`,
+        );
+      }
     }
     return lines.join("\n");
   }
@@ -631,6 +637,16 @@ export class PaperEngine {
 
 function fmtPnl(v: number): string {
   return `${v >= 0 ? "+" : ""}$${v.toFixed(2)}`;
+}
+
+/** Partition trade events into shadow-wallet events and the rest, so the two
+ *  engines (shadow simulator / live paper account) can be fed exclusively. */
+export function splitShadowEvents<T extends TradeEvent>(events: T[], shadow: Set<string>): [T[], T[]] {
+  if (shadow.size === 0) return [[], events];
+  const shadowEvents: T[] = [];
+  const rest: T[] = [];
+  for (const ev of events) (shadow.has(ev.wallet) ? shadowEvents : rest).push(ev);
+  return [shadowEvents, rest];
 }
 
 function round2(v: number): number {

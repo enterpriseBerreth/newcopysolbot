@@ -77,4 +77,11 @@ export interface WalletRankRow {
   weekNeg: number;
   unrealizedUsd: number;
   rank: number;
+  // Shadow-simulation fields (present only for shadow wallets): what the
+  // wallet would have produced under the same strategy with virtual capital.
+  simPnlUsd?: number;
+  simTrades?: number;
+  simWins?: number;
+  simLosses?: number;
+  simUnrealizedUsd?: number;
 }
