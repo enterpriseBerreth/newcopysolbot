@@ -35,6 +35,7 @@ function approx(a: number, b: number, eps = 1e-6): boolean {
 }
 
 const WALLET = "CopyTestWallet1111111111111111111111111111111";
+const SPAM_WALLET = "SpamWallet111111111111111111111111111111111";
 const DEX = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const MINT_A = "TokenAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -46,11 +47,13 @@ interface TxOpts {
   programs?: string[];
   solDeltaLamports?: number;
   feeLamports?: number;
+  wallet?: string;
   tokens?: Array<{ mint: string; pre: number; post: number }>;
 }
 
 function makeTx(opts: TxOpts): JsonTransaction {
-  const keys = [{ pubkey: WALLET, signer: true, writable: true }];
+  const owner = opts.wallet ?? WALLET;
+  const keys = [{ pubkey: owner, signer: true, writable: true }];
   for (const p of opts.programs ?? []) keys.push({ pubkey: p, signer: false, writable: false });
   const pre = 5 * LAMPORTS_PER_SOL;
   const post = pre + (opts.solDeltaLamports ?? 0);
@@ -58,7 +61,7 @@ function makeTx(opts: TxOpts): JsonTransaction {
     (opts.tokens ?? []).map((t) => ({
       accountIndex: 2,
       mint: t.mint,
-      owner: WALLET,
+      owner,
       uiTokenAmount: { uiAmount: which === "pre" ? t.pre : t.post, uiAmountString: String(which === "pre" ? t.pre : t.post), decimals: 6 },
     }));
   return {
@@ -561,6 +564,7 @@ async function main(): Promise<void> {
     async getTransaction(sig: string) {
       if (sig.startsWith("WSBUY")) return makeTx({ sig, programs: [DEX], tokens: [{ mint: MINT_A, pre: 0, post: 100 }] });
       if (sig.startsWith("SHADOWS")) return makeTx({ sig, programs: [DEX], tokens: [{ mint: MINT_B, pre: 0, post: 1 }] });
+      if (sig.startsWith("SPAMS")) return makeTx({ sig, wallet: SPAM_WALLET, programs: [DEX], tokens: [{ mint: MINT_A, pre: 0, post: 100 }] });
       if (sig === "WSFAIL") return makeTx({ sig, err: { InstructionError: [0, 0] }, programs: [DEX] });
       return null;
     },
@@ -635,6 +639,41 @@ async function main(): Promise<void> {
   expect(wsFetched.filter((e) => e.signature === "SHADOWS1").length === 1, "first shadow notification sampled and fetched");
   expect(wsFetched.filter((e) => e.signature === "SHADOWS2" || e.signature === "SHADOWS3").length === 0 && shadowWsWatcher.shadowDroppedNotifications === 2, "subsequent shadow notifications within the sample window are dropped");
   shadowWsWatcher.stop();
+
+  console.log("── ws spam sampling ──");
+
+  const SPAM = SPAM_WALLET;
+  let wsSpamInstance: WsLike | null = null;
+  const spamWsFactory: WsFactory = () => {
+    const obj: WsLike = {
+      send: () => {},
+      close: () => {},
+      onopen: null,
+      onclose: null,
+      onerror: null,
+      onmessage: null,
+    };
+    wsSpamInstance = obj;
+    return obj;
+  };
+  const spamWsWatcher = new WsTradeWatcher(
+    "wss://fake",
+    wsRpc as never,
+    [SPAM],
+    async (events) => void wsFetched.push(...events),
+    spamWsFactory,
+    [],
+    [SPAM],
+  );
+  spamWsWatcher.start();
+  wsSpamInstance!.onopen!();
+  wsSpamInstance!.onmessage!({ data: JSON.stringify({ id: 1, result: 700 }) });
+  wsSpamInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 700, result: { value: { signature: "SPAMS1", err: null } } } }) });
+  wsSpamInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 700, result: { value: { signature: "SPAMS2", err: null } } } }) });
+  await sleep(120);
+  expect(wsFetched.filter((e) => e.signature === "SPAMS1").length === 1, "first spam-wallet notification sampled and fetched");
+  expect(wsFetched.filter((e) => e.signature === "SPAMS2").length === 0 && spamWsWatcher.shadowDroppedNotifications === 1, "second spam-wallet notification within the window is dropped");
+  spamWsWatcher.stop();
 
   console.log("── shadow sim ──");
 

@@ -12,6 +12,9 @@ const MAX_BACKOFF_MS = 30_000;
 /** Shadow wallets are observed via a 1-notification-per-wallet-per-window sample;
  *  their full firehose would starve the RPC budget of the copying wallets. */
 const SHADOW_SAMPLE_MS = 30_000;
+/** Tracked MEV-speed wallets are sampled the same way (shorter window): their
+ *  firehose saturates the fetch queue and crowds out every other wallet. */
+const SPAM_SAMPLE_MS = 10_000;
 
 export interface WsLike {
   send(data: string): void;
@@ -55,6 +58,7 @@ export class WsTradeWatcher {
   private reqWallets = new Map<number, string>();
   private lastShadowSample = new Map<string, number>();
   private shadowSet = new Set<string>();
+  private spamSet = new Set<string>();
 
   get fetchedTransactions(): number {
     return this.fetched;
@@ -91,8 +95,10 @@ export class WsTradeWatcher {
     private onTrades: (events: TradeEvent[]) => Promise<void>,
     private wsFactory: WsFactory = defaultWsFactory,
     private shadowWallets: string[] = [],
+    spamWallets: string[] = [],
   ) {
     this.shadowSet = new Set(shadowWallets);
+    this.spamSet = new Set(spamWallets.filter((w) => !this.shadowSet.has(w)));
   }
 
   start(): void {
@@ -160,12 +166,14 @@ export class WsTradeWatcher {
         if (msg.method !== "logsNotification") return;
         const value = msg.params?.result?.value;
         if (!value?.signature || value.err) return; // failed tx: nothing to copy
-        // Shadow wallets: sample their firehose instead of fetching every tx.
+        // Firehose wallets (shadow + tracked spam-speed): sample one tx per
+        // wallet per window instead of fetching every notification.
         const wallet = msg.params?.subscription != null ? this.subWallets.get(msg.params.subscription) : undefined;
-        if (wallet && this.shadowSet.has(wallet)) {
+        if (wallet && (this.shadowSet.has(wallet) || this.spamSet.has(wallet))) {
           const now = Date.now();
           const last = this.lastShadowSample.get(wallet) ?? 0;
-          if (now - last < SHADOW_SAMPLE_MS) {
+          const windowMs = this.shadowSet.has(wallet) ? SHADOW_SAMPLE_MS : SPAM_SAMPLE_MS;
+          if (now - last < windowMs) {
             this.shadowDropped++;
             return;
           }

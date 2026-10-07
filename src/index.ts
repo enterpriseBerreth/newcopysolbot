@@ -151,7 +151,7 @@ async function main(): Promise<void> {
 
   const rpc = new SolRpc(config.rpcUrl);
   wsWatcher = config.wsUrl
-    ? new WsTradeWatcher(config.wsUrl, rpc, config.trackedWallets, routeTrades, undefined, config.shadowWallets)
+    ? new WsTradeWatcher(config.wsUrl, rpc, config.trackedWallets, routeTrades, undefined, config.shadowWallets, config.spamSampleWallets)
     : null;
   const watcher = new WalletWatcher(
     rpc,
