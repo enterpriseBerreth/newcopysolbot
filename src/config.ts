@@ -55,7 +55,7 @@ export const config = {
   exitSlippagePct: num("EXIT_SLIPPAGE_PCT", 1),
   // Close a position when it is down this many percent (0 disables).
   stopLossPct: num("STOP_LOSS_PCT", 40),
-  markIntervalMs: num("MARK_INTERVAL_MS", 60_000),
+  markIntervalMs: num("MARK_INTERVAL_MS", 30_000),
 
   // Risk gates:
   // Skip entries into tokens whose deepest DexScreener pool has less liquidity
@@ -72,6 +72,7 @@ export const config = {
   // Max accumulated cost per position, as a multiple of the first clip
   // (blocks wallets from DCA-ing many times into one token). 0 disables.
   topUpCostCapMultiple: num("TOP_UP_COST_CAP_MULTIPLE", 2),
+  maxExposurePct: num("MAX_EXPOSURE_PCT", 15),
 
   // Ranking report hours (UTC). Default = 12:00am and 12:00pm GMT-6.
   reportHoursUtc: str("REPORT_HOURS_UTC", "6,18")

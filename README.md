@@ -6,10 +6,10 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 
 1. **Wallet watching** — subscribes to each wallet over Solana WebSocket when configured; HTTP polling runs when subscriptions are unavailable. Every notification still needs an HTTP transaction fetch, so RPC quotas and backlog can cause missed trades.
 2. **Trade detection** — balance-diff decoding for known DEX programs (Raydium, Pump.fun, Jupiter, Meteora, Orca, etc.). Plain transfers without a known DEX program are ignored.
-3. **Copy sizing** — our entry is **1% of the copied wallet's trade notional** (they buy $1,400 → we enter $14; they buy $100 → we enter $1). Trades where the wallet spends **less than $50** are skipped.
-4. **Exits mirrored** — when a wallet sells X% of its bag, we sell X% of our position; every subsequent buy/sell is mirrored proportionally, always at the 1% clip. Profits refill the paper cash balance.
-5. **Realistic fills** — when the wallet's swap moved native SOL, the wallet's actual fill price is derived from the SOL leg (SOL moved × SOL price ÷ tokens) and used as our paper fill ±1% slippage, so PnL reflects copying at their price rather than a late market mark. Token↔token swaps and implausible attributions fall back to the DexScreener mark.
-6. **Stop loss** — open positions are re-marked every 60s and force-closed at **-40%** (mark price, not the wallet's fill).
+3. **Copy sizing** — the three premium wallets (29yF, 9BMz, CHCL) use a 10% clip of their trade notional when cash, top-up and exposure limits permit, otherwise a 5% clip if it fits; other wallets use 1%. Buys below $200 copied-wallet notional are skipped. Exposure per copied wallet and per token is capped at 15% of paper capital; existing oversized positions can still exit.
+4. **Exits mirrored** — when a wallet sells X% of its bag, we sell X% of our position; profits refill paper cash.
+5. **Paper fills** — the copied wallet's SOL leg estimates its trade notional for clip sizing. Our paper entry/exit uses the available market price at detection, not the wallet's earlier execution price, plus entry/exit slippage.
+6. **Stop loss** — open positions are re-marked every 30s and force-closed when down 40%. Rapid price gaps can exceed this threshold.
 7. **Wallet rankings** — realized PnL, trade counts and positive/negative closed trades per copied wallet. Ranked reports are sent via Telegram at **12:00am and 12:00pm** (default hours 06:00/18:00 UTC = midnight/noon GMT-6, configurable via `REPORT_HOURS_UTC`) and exposed on `/rankings`.
 8. **Closed-trade alerts** — Telegram message after every closed trade with the copied wallet, token address/name, capital before → after, and PnL in $ and %. Entries send nothing.
 9. **Compounding** — capital = idle cash + deployed positions; all realized profits return to cash and are reused for new entries.
@@ -21,13 +21,15 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 | `SOLANA_RPC_URL` | publicnode | RPC endpoint (paid endpoint recommended for 10+ wallets) |
 | `SOLANA_WS_URL` | — | WebSocket endpoint (e.g. Helius) for push-based capture; polling stays on as fallback |
 | `TRACKED_WALLETS` | starter list | Comma-separated wallets to copy |
-| `CLIP_PCT` | `1` | Our entry as % of wallet's trade notional |
-| `MIN_WALLET_TRADE_USD` | `50` | Skip wallet trades below this notional |
-| `STARTING_BUDGET_USD` | `10000` | Paper budget |
+| `CLIP_PCT` | `1` | Standard entry as % of copied wallet's trade notional |
+| `PREMIUM_CLIP_WALLETS` | 29yF, 9BMz, CHCL | Wallets eligible for 10% then 5% fallback clips |
+| `MAX_EXPOSURE_PCT` | `15` | Max cost basis per wallet and per token as % of paper capital; 0 disables |
+| `MIN_WALLET_TRADE_USD` | `200` | Skip copied-wallet buys below this notional |
+| `STARTING_BUDGET_USD` | `1000` (production) | Paper budget; persisted accounts retain their current balance |
 | `STOP_LOSS_PCT` | `40` | Force-close positions down this much |
 | `MAX_POSITIONS` | `1000` | Safety valve — concurrency is budget-bound |
 | `ENTRY_SLIPPAGE_PCT` / `EXIT_SLIPPAGE_PCT` | `1` | Fill realism |
-| `MARK_INTERVAL_MS` | `60000` | Stop-loss marking cadence |
+| `MARK_INTERVAL_MS` | `30000` | Stop-loss marking cadence |
 | `REPORT_HOURS_UTC` | `6,18` | UTC hours for ranking reports (12am + 12pm GMT-6) |
 | `POLL_INTERVAL_MS` | `15000` | Per-wallet signature polling cadence |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | Telegram alerts |
@@ -67,7 +69,8 @@ npm start
 
 ## Limitations
 
-- Paper fills estimate the wallet's SOL-denominated fill where unambiguous; otherwise they use DexScreener's current quote. They do not model MEV, swap fees, token taxes, transfer restrictions or market impact.
+- Paper fills use DexScreener's latest available market quote at observation time plus configured slippage; the wallet's own SOL fill only estimates its trade notional for sizing. Cached quotes can be up to 30 seconds old. Simulation still omits MEV, swap fees, token taxes, transfer restrictions and market impact; historical trades remain on their original recorded basis.
+- Exposure caps block only new buys; positions opened before a cap was introduced are not automatically sold and may remain over the limit until copied exits or stop-losses occur.
 - WebSocket notifications are not transaction data: each still requires an HTTP fetch. A sustained 429, subscription outage or full queue means some fast-wallet trades will be missed; `/health` reports `wsHealthy`, `wsPending` and `wsDropped` so coverage is not assumed.
 - Balance-diff detection can misread exotic transfers through a known DEX program; trades on unlisted programs and tokens with no price cannot be copied.
 - High-volume wallet coverage requires enough provider capacity for transaction fetches, not just WebSocket subscriptions.

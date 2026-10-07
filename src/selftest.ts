@@ -240,20 +240,45 @@ async function main(): Promise<void> {
   const sl = engine.ledger[engine.ledger.length - 1]!;
   expect(sl.reason === "stop-loss" && (sl.pnlUsd ?? 0) < 0, "stop-loss trade booked with reason + loss");
 
-  // 6b) Realistic fills: wallet's actual price derived from the SOL leg (SOL = $10).
+  const stopMarkDir = `${dataDir}-stop-mark`;
+  let stopMarkPrice = 1;
+  let stopMarkReads = 0;
+  const stopMarkEngine = new PaperEngine({
+    startingBudgetUsd: 100,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 10,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: stopMarkDir,
+    pairProvider: async () => {
+      stopMarkReads++;
+      return { priceUsd: stopMarkPrice, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" };
+    },
+    solPriceProvider: async () => 10,
+  });
+  await stopMarkEngine.load();
+  await stopMarkEngine.onTrades([ev({ signature: "STOP-MARK-BUY" })]);
+  stopMarkPrice = 0.5;
+  const readsBeforeStop = stopMarkReads;
+  await stopMarkEngine.markAll();
+  expect(stopMarkReads - readsBeforeStop === 1, "stop-loss uses its triggering mark without a second price fetch");
+  expect(stopMarkEngine.ledger.at(-1)?.reason === "stop-loss" && approx(stopMarkEngine.ledger.at(-1)!.priceUsd, 0.495), "stop-loss exit uses the price that actually triggered it");
+
+  // 6b) The wallet's SOL leg sizes our copy, but our executable fill is the
+  // market price at detection time rather than the wallet's earlier fill.
   prices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
-  // Wallet buys 100 tokens for 6 SOL ($60): derived fill $0.60, notional $60.
   await engine.onTrades([ev({ signature: "E7", solDelta: -6 })]);
   const pos7 = engine.state.positions[`${WALLET}:${MINT_A}`]!;
   expect(approx(pos7.costUsd, 0.6, 1e-9), "clip = 1% of wallet's real $60 SOL spend");
-  expect(approx(pos7.qty, 0.6 / (0.6 * 1.01)), "entry fill = wallet's derived price + entry slippage");
+  expect(approx(pos7.qty, 0.6 / 1.01), "entry qty uses copy-time market price, not wallet's earlier $0.60 fill");
   const t7 = engine.ledger[engine.ledger.length - 1]!;
-  expect(approx(t7.priceUsd, 0.606), "ledger records wallet-derived entry price");
-  // Wallet sells 40 tokens for 1.2 SOL ($12): derived exit fill $0.30.
+  expect(approx(t7.priceUsd, 1.01), "ledger records market entry plus entry slippage");
   const qtyBeforeExit = pos7.qty;
   await engine.onTrades([ev({ signature: "E8", side: "sell", tokenDelta: 40, remainingTokens: 60, solDelta: 1.2 })]);
   const t8 = engine.ledger[engine.ledger.length - 1]!;
-  expect(approx(t8.priceUsd, 0.3 * 0.99), "exit fill = wallet's derived price - exit slippage");
+  expect(approx(t8.priceUsd, 0.99), "exit fill uses copy-time market price, not wallet's earlier $0.30 fill");
   expect(approx(t8.qty, qtyBeforeExit * 0.4), "exit still mirrors the sold fraction of the bag");
   // Implausible SOL attribution (derived 20x market) -> fall back to market price.
   await engine.onTrades([ev({ signature: "E9", tokenDelta: 100, remainingTokens: 160, solDelta: -200 })]);
@@ -369,6 +394,29 @@ async function main(): Promise<void> {
   expect(approx(premiumTopUp.state.positions[`${premiumWallets[0]}:${MINT_A}`]!.costUsd, 150) && approx(premiumTopUp.state.cashUsd, 25), "premium top-up falls back to 5% within cap");
   await premiumTopUp.onTrades([ev({ signature: "PREMIUM-EXIT", wallet: premiumWallets[0], side: "sell", tokenDelta: 500, remainingTokens: 500 })]);
   expect(approx(premiumTopUp.state.positions[`${premiumWallets[0]}:${MINT_A}`]!.costUsd, 75), "premium exit mirrors sold fraction and leaves proportional cost basis");
+
+  const exposureEngine = new PaperEngine({ ...premiumOpts, startingBudgetUsd: 1_000, dataDir: `${dataDir}-exposure`, maxExposurePct: 15 });
+  await exposureEngine.load();
+  await exposureEngine.onTrades([ev({ signature: "EXPOSURE-1", wallet: premiumWallets[0], tokenDelta: 2_000 })]);
+  expect(approx(exposureEngine.state.positions[`${premiumWallets[0]}:${MINT_A}`]!.costUsd, 100), "exposure limit chooses the 5% clip when 10% exceeds 15% of capital");
+  await exposureEngine.onTrades([ev({ signature: "EXPOSURE-2", wallet: premiumWallets[0], mint: MINT_B, tokenDelta: 1_000 })]);
+  expect(approx(exposureEngine.state.positions[`${premiumWallets[0]}:${MINT_B}`]!.costUsd, 50), "wallet-wide exposure triggers fallback even on another token");
+  const exposedCash = exposureEngine.state.cashUsd;
+  await exposureEngine.onTrades([ev({ signature: "EXPOSURE-3", wallet: premiumWallets[0], mint: MINT_B, tokenDelta: 1_000 })]);
+  expect(approx(exposureEngine.state.cashUsd, exposedCash), "entry is skipped when both premium clips exceed wallet exposure");
+  await exposureEngine.onTrades([ev({ signature: "EXPOSURE-4", wallet: premiumWallets[1], tokenDelta: 1_200 })]);
+  expect(!exposureEngine.state.positions[`${premiumWallets[1]}:${MINT_A}`], "token-wide exposure blocks another wallet from concentrating in the same mint");
+  await exposureEngine.onTrades([ev({ signature: "EXPOSURE-5", wallet: ordinaryWallet, tokenDelta: 500 })]);
+  expect(approx(exposureEngine.state.positions[`${ordinaryWallet}:${MINT_A}`]!.costUsd, 5), "ordinary 1% clips are still permitted when exposure remains");
+
+  const legacyDir = `${dataDir}-exposure-legacy`;
+  const legacyEngine = new PaperEngine({ ...premiumOpts, startingBudgetUsd: 1_000, dataDir: legacyDir });
+  await legacyEngine.load();
+  await legacyEngine.onTrades([ev({ signature: "LEGACY-BUY", wallet: premiumWallets[0], tokenDelta: 9_000 })]);
+  const protectedEngine = new PaperEngine({ ...premiumOpts, startingBudgetUsd: 1_000, dataDir: legacyDir, maxExposurePct: 15 });
+  await protectedEngine.load();
+  await protectedEngine.onTrades([ev({ signature: "LEGACY-SELL", wallet: premiumWallets[0], side: "sell", tokenDelta: 9_000, remainingTokens: 0 })]);
+  expect(!protectedEngine.state.positions[`${premiumWallets[0]}:${MINT_A}`], "existing position above exposure cap may still exit normally");
 
   const tinyDir = `${dataDir}-tiny`;
   const tinyEngine = new PaperEngine({
@@ -859,8 +907,9 @@ async function main(): Promise<void> {
   expect(approx(resetGen7.state.cashUsd, 999) && resetGen7.ledger.length === 1, "load/save cycle preserves lastResetId: no spurious re-reset");
 
   await fs.rm(dataDir, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-stop-mark`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });
-  for (const name of ["premium", "premium-exact", "premium-fallback", "premium-cap", "premium-topup"]) {
+  for (const name of ["premium", "premium-exact", "premium-fallback", "premium-cap", "premium-topup", "exposure", "exposure-legacy"]) {
     await fs.rm(`${dataDir}-${name}`, { recursive: true, force: true });
   }
   await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });

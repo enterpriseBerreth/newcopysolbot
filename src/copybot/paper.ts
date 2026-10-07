@@ -37,6 +37,7 @@ export interface EngineOpts {
   killSwitchMaxWinRate?: number;
   /** Max accumulated position cost, as a multiple of the first clip. 0 disables. */
   topUpCostCapMultiple?: number;
+  maxExposurePct?: number;
   /** Operation id for a capital reset: when it differs from the last applied
    *  reset, previous state + ledger are archived and a fresh account starts
    *  from startingBudgetUsd. Empty disables. */
@@ -70,6 +71,7 @@ export class PaperEngine {
   private killMinSells: number;
   private killMaxWinRate: number;
   private topUpCap: number;
+  private maxExposurePct: number;
 
   shadowTradesSkipped = 0;
 
@@ -82,6 +84,7 @@ export class PaperEngine {
     this.killMinSells = opts.killSwitchMinSells ?? 20;
     this.killMaxWinRate = opts.killSwitchMaxWinRate ?? 0.3;
     this.topUpCap = opts.topUpCostCapMultiple ?? 2;
+    this.maxExposurePct = opts.maxExposurePct ?? 0;
     this.pair = opts.pairProvider ?? getPairInfo;
     this.solPrice = opts.solPriceProvider ?? getSolPriceUsd;
     this.notifier = opts.notifier ?? { send: async () => {} };
@@ -206,30 +209,22 @@ export class PaperEngine {
       log.warn(`no price for ${ev.mint.slice(0, 8)}…; skipped ${ev.side}`);
       return;
     }
-    const { fillRef, walletNotional, derived } = await this.resolveFill(ev, marketPrice);
+    const { walletNotional, derived } = await this.resolveFill(ev, marketPrice);
     log.debug(
-      `${ev.side} ${ev.mint.slice(0, 8)}… fill $${fillRef.toPrecision(6)} ` +
-        `(${derived ? "wallet-derived" : "market"}) notional $${walletNotional.toFixed(2)}`,
+      `${ev.side} ${ev.mint.slice(0, 8)}… market $${marketPrice.toPrecision(6)} ` +
+        `(${derived ? "SOL-leg" : "market-estimated"} notional $${walletNotional.toFixed(2)})`,
     );
-    if (ev.side === "buy") await this.copyBuy(ev, fillRef, info?.symbol ?? ev.mint.slice(0, 6), walletNotional, info);
-    else await this.copySell(ev, fillRef, info?.symbol ?? ev.mint.slice(0, 6), walletNotional);
+    if (ev.side === "buy") await this.copyBuy(ev, marketPrice, info?.symbol ?? ev.mint.slice(0, 6), walletNotional, info);
+    else await this.copySell(ev, marketPrice, info?.symbol ?? ev.mint.slice(0, 6), walletNotional);
   }
 
-  /**
-   * Resolve the reference price for a copy fill.
-   *
-   * Realistic copying: when the wallet's swap moved native SOL, derive the
-   * wallet's ACTUAL fill price from the SOL leg (SOL moved x SOL price /
-   * tokens moved) and use that, so paper PnL reflects entering/exiting at
-   * roughly the same price as the copied wallet. Falls back to the current
-   * market mark for token<->token swaps or when the derived price is
-   * implausible (glitchy SOL attribution in multi-swap txs).
-   */
+  /** Resolve the copied wallet's notional from its SOL leg when credible.
+   *  Our paper execution always uses the available market mark: the wallet's
+   *  earlier fill is not an executable price after we observe its trade. */
   private async resolveFill(
     ev: TradeEvent,
     marketPrice: number,
-  ): Promise<{ fillRef: number; walletNotional: number; derived: boolean }> {
-    let fillRef = marketPrice;
+  ): Promise<{ walletNotional: number; derived: boolean }> {
     let walletNotional = ev.tokenDelta * marketPrice;
     let derived = false;
     const solUsd = await this.solPrice();
@@ -242,12 +237,11 @@ export class PaperEngine {
         candidate <= marketPrice * 10 &&
         candidate >= marketPrice * 0.1
       ) {
-        fillRef = candidate;
         walletNotional = solMoved * solUsd;
         derived = true;
       }
     }
-    return { fillRef, walletNotional, derived };
+    return { walletNotional, derived };
   }
 
   private async copyBuy(
@@ -275,31 +269,34 @@ export class PaperEngine {
     }
     const premium = this.premium.has(ev.wallet);
     const primaryPct = premium ? (this.opts.premiumClipPct ?? 10) : this.opts.clipPct;
-    const fallbackPct = premium ? (this.opts.premiumFallbackClipPct ?? 5) : primaryPct;
-    const primaryUsd = (walletNotional * primaryPct) / 100;
-    const fallbackUsd = (walletNotional * fallbackPct) / 100;
-    const useFallback = premium && this.state.cashUsd < primaryUsd;
-    const ourUsd = useFallback ? fallbackUsd : primaryUsd;
-    const appliedPct = useFallback ? fallbackPct : primaryPct;
+    const fallbackPct = this.opts.premiumFallbackClipPct ?? 5;
     const key = `${ev.wallet}:${ev.mint}`;
     const existing = this.state.positions[key];
-
-    if (existing && this.topUpCap > 0 && existing.costUsd + ourUsd > existing.clipUsd * this.topUpCap) {
-      log.warn(
-        `skip top-up: ${short(ev.wallet)} ${symbol} would cost $${(existing.costUsd + ourUsd).toFixed(2)} ` +
-          `> cap ${this.topUpCap}x first clip $${existing.clipUsd.toFixed(2)}`,
-      );
-      return;
-    }
-
     if (!existing && Object.keys(this.state.positions).length >= this.opts.maxPositions) {
       log.warn(`max positions reached; skipped buy of ${symbol}`);
       return;
     }
-    if (this.state.cashUsd < ourUsd) {
-      log.warn(`insufficient cash $${this.state.cashUsd.toFixed(2)} for $${ourUsd.toFixed(2)} buy of ${symbol}`);
+
+    const positions = Object.values(this.state.positions);
+    const walletCost = positions.filter((pos) => pos.wallet === ev.wallet).reduce((sum, pos) => sum + pos.costUsd, 0);
+    const tokenCost = positions.filter((pos) => pos.mint === ev.mint).reduce((sum, pos) => sum + pos.costUsd, 0);
+    const exposureLimit = this.maxExposurePct > 0 ? (this.capital() * this.maxExposurePct) / 100 : Infinity;
+    const choices = premium ? [primaryPct, fallbackPct] : [primaryPct];
+    const appliedPct = choices.find((pct) => {
+      const amount = (walletNotional * pct) / 100;
+      return amount > 0 && this.state.cashUsd >= amount &&
+        (!existing || this.topUpCap <= 0 || existing.costUsd + amount <= existing.clipUsd * this.topUpCap) &&
+        walletCost + amount <= exposureLimit && tokenCost + amount <= exposureLimit;
+    });
+    if (appliedPct === undefined) {
+      log.warn(
+        `skip buy: ${short(ev.wallet)} ${symbol} cannot fit ${choices.join("% or ")}% clip ` +
+          `(cash $${this.state.cashUsd.toFixed(2)}, wallet $${walletCost.toFixed(2)}, token $${tokenCost.toFixed(2)}, ` +
+          `exposure limit $${Number.isFinite(exposureLimit) ? exposureLimit.toFixed(2) : "off"})`,
+      );
       return;
     }
+    const ourUsd = (walletNotional * appliedPct) / 100;
 
     const fillPrice = price * (1 + this.opts.entrySlippagePct / 100);
     const qty = ourUsd / fillPrice;
@@ -479,16 +476,16 @@ export class PaperEngine {
   }
 
   private async markPositions(): Promise<void> {
-    const stops: Position[] = [];
+    const stops: Array<{ pos: Position; priceUsd: number }> = [];
     for (const pos of Object.values(this.state.positions)) {
       const info = await this.pair(pos.mint);
       if (!info?.priceUsd) continue;
       const entryPrice = pos.costUsd / pos.qty;
       const pnlPct = ((info.priceUsd - entryPrice) / entryPrice) * 100;
-      if (this.opts.stopLossPct > 0 && pnlPct <= -this.opts.stopLossPct) stops.push(pos);
+      if (this.opts.stopLossPct > 0 && pnlPct <= -this.opts.stopLossPct) stops.push({ pos, priceUsd: info.priceUsd });
     }
-    for (const pos of stops) {
-      await this.forceClose(pos, "stop-loss");
+    for (const { pos, priceUsd } of stops) {
+      await this.forceClose(pos, "stop-loss", priceUsd);
     }
     if (stops.length > 0) await this.save();
   }
