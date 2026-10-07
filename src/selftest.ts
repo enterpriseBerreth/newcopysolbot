@@ -13,7 +13,7 @@ import { extractTrades } from "./copybot/decoder.js";
 import { PaperEngine, splitShadowEvents } from "./copybot/paper.js";
 import type { NotifierLike } from "./copybot/notifier.js";
 import type { JsonTransaction, JsonTokenBalance } from "./copybot/rpc.js";
-import { sleep } from "./copybot/rpc.js";
+import { SolRpc, sleep } from "./copybot/rpc.js";
 import { WalletWatcher, short } from "./copybot/watcher.js";
 import { WsTradeWatcher } from "./copybot/ws.js";
 import type { WsLike, WsFactory } from "./copybot/ws.js";
@@ -612,6 +612,38 @@ async function main(): Promise<void> {
   await capEngine.onTrades([ev({ signature: "C-3", tokenDelta: 100, remainingTokens: 300 })]);
   expect(approx(capEngine.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 2, 1e-9), "top-up beyond the cap multiple is skipped");
   expect(capEngine.ledger.some((t) => t.side === "buy" && t.signature === "C-2") && !capEngine.ledger.some((t) => t.side === "buy" && t.signature === "C-3"), "only cap-compliant top-ups are ledgered");
+
+  console.log("── rpc batch compatibility ──");
+
+  const originalFetch = globalThis.fetch;
+  let unsupportedBatches = 0;
+  let individualCalls = 0;
+  try {
+    globalThis.fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as { id: number; params: string[] } | Array<{ id: number; params: string[] }>;
+      if (Array.isArray(request)) {
+        unsupportedBatches++;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32600, message: "Maximum number of getTransaction calls is 1" } }), { status: 400 });
+      }
+      individualCalls++;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: makeTx({ sig: request.params[0] }) }), { status: 200 });
+    };
+    const limitedRpc = new SolRpc("https://fake", 0);
+    const first = await limitedRpc.getTransactions(["RPC-A", "RPC-B"]);
+    const second = await limitedRpc.getTransactions(["RPC-C", "RPC-D"]);
+    expect(first[0]?.transaction.signatures[0] === "RPC-A" && first[1]?.transaction.signatures[0] === "RPC-B" && second[1]?.transaction.signatures[0] === "RPC-D", "batch-rejecting RPC still fetches all requested transactions in order");
+    expect(unsupportedBatches === 1 && individualCalls === 4, "HTTP 400 batch rejection disables batching after the first attempt");
+
+    globalThis.fetch = async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as Array<{ id: number; params: string[] }>;
+      return new Response(JSON.stringify(request.reverse().map((item) => ({ jsonrpc: "2.0", id: item.id, result: makeTx({ sig: item.params[0] }) }))), { status: 200 });
+    };
+    const capableRpc = new SolRpc("https://fake", 0);
+    const batched = await capableRpc.getTransactions(["RPC-E", "RPC-F"]);
+    expect(batched[0]?.transaction.signatures[0] === "RPC-E" && batched[1]?.transaction.signatures[0] === "RPC-F", "batch-capable RPC preserves response ordering by id");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 
   console.log("── watcher cursor ──");
 

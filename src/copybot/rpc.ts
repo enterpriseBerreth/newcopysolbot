@@ -2,10 +2,13 @@ import { createLogger } from "../logger.js";
 
 const log = createLogger("rpc");
 
+class BatchUnsupportedError extends Error {}
+
 export class SolRpc {
   /** Serialized request chain: enforces global spacing between RPC calls. */
   private chain: Promise<unknown> = Promise.resolve();
   private lastCallAt = 0;
+  private batchSupported = true;
 
   constructor(
     private url: string,
@@ -39,6 +42,7 @@ export class SolRpc {
             throw new Error(`rpc ${label} -> HTTP 429`);
           }
           if (res.status >= 500) throw new Error(`rpc ${label} -> HTTP ${res.status}`);
+          if (Array.isArray(body) && res.status === 400) throw new BatchUnsupportedError(`rpc ${label} -> HTTP 400`);
           if (!res.ok) throw new Error(`rpc ${label} -> HTTP ${res.status}`);
           const json = (await res.json()) as { result?: T; error?: { message: string } } | unknown[];
           if (Array.isArray(json)) {
@@ -50,6 +54,7 @@ export class SolRpc {
           this.minIntervalMs = Math.max(500, Math.floor(this.minIntervalMs * 0.9));
           return json.result;
         } catch (err) {
+          if (err instanceof BatchUnsupportedError) throw err;
           lastErr = err;
           if (attempt < retries) {
             const delay = 1000 * 2 ** attempt;
@@ -81,15 +86,26 @@ export class SolRpc {
 
   async getTransactions(signatures: string[]): Promise<(JsonTransaction | null)[]> {
     if (signatures.length === 0) return [];
-    const responses = await this.request<Array<{ id: number; result?: JsonTransaction | null; error?: { message: string } }>>(
-      signatures.map((signature, index) => ({
-        jsonrpc: "2.0",
-        id: index + 1,
-        method: "getTransaction",
-        params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }],
-      })),
-      "getTransaction batch",
-    );
+    if (signatures.length === 1 || !this.batchSupported) {
+      return Promise.all(signatures.map((signature) => this.getTransaction(signature)));
+    }
+    let responses: Array<{ id: number; result?: JsonTransaction | null; error?: { message: string } }>;
+    try {
+      responses = await this.request<Array<{ id: number; result?: JsonTransaction | null; error?: { message: string } }>>(
+        signatures.map((signature, index) => ({
+          jsonrpc: "2.0",
+          id: index + 1,
+          method: "getTransaction",
+          params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }],
+        })),
+        "getTransaction batch",
+      );
+    } catch (err) {
+      if (!(err instanceof BatchUnsupportedError)) throw err;
+      this.batchSupported = false;
+      log.warn("RPC provider rejects transaction batches; switching to individual requests");
+      return Promise.all(signatures.map((signature) => this.getTransaction(signature)));
+    }
     if (!Array.isArray(responses) || responses.length !== signatures.length) {
       throw new Error("rpc getTransaction batch -> incomplete response");
     }
