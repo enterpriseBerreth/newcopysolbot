@@ -34,6 +34,10 @@ export interface EngineOpts {
   killSwitchMaxWinRate?: number;
   /** Max accumulated position cost, as a multiple of the first clip. 0 disables. */
   topUpCostCapMultiple?: number;
+  /** Operation id for a capital reset: when it differs from the last applied
+   *  reset, previous state + ledger are archived and a fresh account starts
+   *  from startingBudgetUsd. Empty disables. */
+  resetId?: string;
   pairProvider?: PairProvider;
   solPriceProvider?: () => Promise<number>;
   notifier?: NotifierLike;
@@ -82,8 +86,35 @@ export class PaperEngine {
 
   // ── persistence ──────────────────────────────────────────────
 
+  /** Capital reset: when a new RESET_ID is provided, archive the previous
+   *  snapshot + ledger and start a fresh account at startingBudgetUsd. */
+  private async maybeReset(): Promise<void> {
+    const resetId = this.opts.resetId;
+    if (!resetId) return;
+    let lastResetId: string | undefined;
+    try {
+      const raw = await fs.readFile(this.snapshotFile, "utf8");
+      lastResetId = (JSON.parse(raw) as Partial<PaperState>).lastResetId;
+    } catch {
+      /* no snapshot yet: nothing to archive */
+    }
+    if (lastResetId === resetId) return;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    for (const file of [this.snapshotFile, this.ledgerFile]) {
+      try {
+        await fs.rename(file, `${file}.archive-${stamp}`);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+    }
+    this.state = { ...defaultState(this.opts.startingBudgetUsd), lastResetId: resetId };
+    this.ledger = [];
+    log.warn(`RESET ${resetId}: previous state + ledger archived; fresh account starting at $${this.opts.startingBudgetUsd}`);
+  }
+
   async load(): Promise<void> {
     await fs.mkdir(this.opts.dataDir, { recursive: true });
+    await this.maybeReset();
     try {
       const raw = await fs.readFile(this.snapshotFile, "utf8");
       const saved = JSON.parse(raw) as Partial<PaperState>;

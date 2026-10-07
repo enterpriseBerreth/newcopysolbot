@@ -1,7 +1,9 @@
 import "dotenv/config";
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import { config } from "./config.js";
 import { createLogger } from "./logger.js";
+import { runBotCheck, type BotRegistry } from "./copybot/botwatch.js";
 import { PaperEngine, splitShadowEvents } from "./copybot/paper.js";
 import { SolRpc } from "./copybot/rpc.js";
 import { TelegramNotifier } from "./copybot/notifier.js";
@@ -32,6 +34,7 @@ async function main(): Promise<void> {
     killSwitchMinSells: config.killSwitchMinSells,
     killSwitchMaxWinRate: config.killSwitchMaxWinRate,
     topUpCostCapMultiple: config.topUpCostCapMultiple,
+    resetId: config.resetId,
     notifier,
   });
 
@@ -51,6 +54,7 @@ async function main(): Promise<void> {
     trackedWallets: config.shadowWallets,
     liquidityFloorUsd: config.liquidityFloorUsd,
     topUpCostCapMultiple: config.topUpCostCapMultiple,
+    resetId: config.resetId,
     killSwitchPnlUsd: 0,
     killSwitchMinSells: 0,
   });
@@ -165,6 +169,28 @@ async function main(): Promise<void> {
   await watcher.start();
   await engine.save();
   wsWatcher?.start();
+
+  // Bot-wallet check: on every boot, analyze tracked wallets not yet in the
+  // registry (i.e. newly added ones). Bot-like wallets trigger one Telegram
+  // alert; each wallet is only flagged once.
+  const botRegistryFile = path.join(config.dataDir, "bot-analysis.json");
+  let botRegistry: BotRegistry = {};
+  try {
+    botRegistry = JSON.parse(await fs.readFile(botRegistryFile, "utf8")) as BotRegistry;
+  } catch {
+    /* first run: no registry yet */
+  }
+  void runBotCheck(
+    rpc,
+    config.trackedWallets,
+    botRegistry,
+    async (reg) => {
+      const tmp = `${botRegistryFile}.tmp`;
+      await fs.writeFile(tmp, JSON.stringify(reg));
+      await fs.rename(tmp, botRegistryFile);
+    },
+    (text) => notifier.send(text),
+  ).catch((err) => log.error(`bot check failed: ${String(err)}`));
 
   // Stop-loss marking loop.
   let marking = false;

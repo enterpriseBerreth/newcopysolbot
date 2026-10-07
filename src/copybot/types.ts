@@ -54,6 +54,8 @@ export interface PaperState {
   /** Bounded ring of processed `${wallet}:${signature}` keys. */
   processedSigs: string[];
   lastManualCloseId?: string;
+  /** Last applied capital-reset operation id (RESET_ID). */
+  lastResetId?: string;
 }
 
 export interface PairInfo {

@@ -75,6 +75,9 @@ export const config = {
 
   dataDir: str("DATA_DIR", "data"),
   manualCloseId: str("MANUAL_CLOSE_ID", ""),
+  // Operation id for a capital reset: setting a NEW value archives the previous
+  // paper state + ledger and restarts the account at STARTING_BUDGET_USD.
+  resetId: str("RESET_ID", ""),
   // Shadow wallets: monitored (cursor, decode, rankings) but never funded.
   shadowWallets: [
     ...new Set(

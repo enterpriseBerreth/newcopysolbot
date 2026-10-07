@@ -7,6 +7,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { LAMPORTS_PER_SOL } from "./copybot/constants.js";
+import { classifySignatures, type SignatureRow } from "./copybot/botwatch.js";
 import { extractTrades } from "./copybot/decoder.js";
 import { PaperEngine, splitShadowEvents } from "./copybot/paper.js";
 import type { NotifierLike } from "./copybot/notifier.js";
@@ -731,6 +732,62 @@ async function main(): Promise<void> {
   const plainReport = simEngine.formatRankings(await engine.walletRankings());
   expect(!plainReport.includes("sim:"), "formatRankings omits the sim line for non-sim rows");
 
+  console.log("── bot classification ──");
+
+  const now = Math.floor(Date.now() / 1000);
+  const botSigs: SignatureRow[] = Array.from({ length: 200 }, (_, i) => ({
+    signature: `BOT${i}`,
+    slot: i,
+    blockTime: now - i,
+    err: i % 5 === 0 ? null : { InstructionError: [0, 0] },
+  }));
+  const botVerdict = classifySignatures(SPAM_WALLET, botSigs);
+  expect(botVerdict.botLike && botVerdict.failRate >= 0.5 && botVerdict.medianIntervalSec <= 2, "80% fail rate + 1s tx cadence classifies as bot-like");
+
+  const humanSigs: SignatureRow[] = Array.from({ length: 20 }, (_, i) => ({
+    signature: `HUM${i}`,
+    slot: i,
+    blockTime: now - i * 6 * 3600,
+    err: i % 7 === 0 ? { InstructionError: [0, 0] } : null,
+  }));
+  const humanVerdict = classifySignatures(WALLET, humanSigs);
+  expect(!humanVerdict.botLike && humanVerdict.reasons.length === 0, "low-frequency trading with few failures classifies as human");
+  expect(classifySignatures(WALLET, []).sampled === 0 && !classifySignatures(WALLET, []).botLike, "wallet with no history is not flagged as a bot");
+
+  console.log("── capital reset ──");
+
+  const resetDir = `${dataDir}-reset`;
+  const resetPrices = new Map(prices);
+  const resetOpts = {
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: resetDir,
+    pairProvider: async (mint: string) => resetPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  };
+  const resetGen1 = new PaperEngine({ ...resetOpts, resetId: "reset-r1" });
+  await resetGen1.load();
+  await resetGen1.onTrades([ev({ signature: "R1" })]); // deploy $1
+  expect(approx(resetGen1.state.cashUsd, 999), "reset engine starts at its budget and trades normally");
+  await resetGen1.save();
+
+  const resetGen2 = new PaperEngine({ ...resetOpts, resetId: "reset-r1" });
+  await resetGen2.load();
+  expect(approx(resetGen2.state.cashUsd, 999) && resetGen2.ledger.length === 1, "same reset id on restart preserves state");
+
+  const resetGen3 = new PaperEngine({ ...resetOpts, resetId: "reset-r2" });
+  await resetGen3.load();
+  expect(approx(resetGen3.state.cashUsd, 1000) && resetGen3.ledger.length === 0, "new reset id archives state and starts fresh at the budget");
+  await resetGen3.save();
+  const resetGen4 = new PaperEngine({ ...resetOpts, resetId: "reset-r2" });
+  await resetGen4.load();
+  expect(approx(resetGen4.state.cashUsd, 1000) && resetGen4.ledger.length === 0, "reset id is idempotent: no re-archival on next boot");
+
   await fs.rm(dataDir, { recursive: true, force: true });
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });
@@ -741,6 +798,7 @@ async function main(): Promise<void> {
   await fs.rm(`${dataDir}-liq`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-cap`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-simsim`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-reset`, { recursive: true, force: true });
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);
