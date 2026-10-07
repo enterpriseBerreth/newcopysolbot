@@ -45,6 +45,7 @@ async function main(): Promise<void> {
       wsHealthy: wsWatcher?.healthy ?? false,
       wsPending: wsWatcher?.pending ?? 0,
       wsDropped: wsWatcher?.droppedNotifications ?? 0,
+      wsShadowDropped: wsWatcher?.shadowDroppedNotifications ?? 0,
       wsFetched: wsWatcher?.fetchedTransactions ?? 0,
       wsDecodedTrades: wsWatcher?.decodedTrades ?? 0,
     }),
@@ -78,7 +79,7 @@ async function main(): Promise<void> {
 
   const rpc = new SolRpc(config.rpcUrl);
   wsWatcher = config.wsUrl
-    ? new WsTradeWatcher(config.wsUrl, rpc, config.trackedWallets, (events) => engine.onTrades(events))
+    ? new WsTradeWatcher(config.wsUrl, rpc, config.trackedWallets, (events) => engine.onTrades(events), undefined, config.shadowWallets)
     : null;
   const watcher = new WalletWatcher(
     rpc,

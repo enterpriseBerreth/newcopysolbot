@@ -462,6 +462,7 @@ async function main(): Promise<void> {
   const wsRpc = {
     async getTransaction(sig: string) {
       if (sig.startsWith("WSBUY")) return makeTx({ sig, programs: [DEX], tokens: [{ mint: MINT_A, pre: 0, post: 100 }] });
+      if (sig.startsWith("SHADOWS")) return makeTx({ sig, programs: [DEX], tokens: [{ mint: MINT_B, pre: 0, post: 1 }] });
       if (sig === "WSFAIL") return makeTx({ sig, err: { InstructionError: [0, 0] }, programs: [DEX] });
       return null;
     },
@@ -500,6 +501,42 @@ async function main(): Promise<void> {
   await sleep(100);
   expect(wsFetched.length === 4 && batchSizes.join(",") === "1,1,2" && wsWatcher.pending === 0, `ws fetches queued transactions in batches and drains them (${batchSizes.join(",")})`);
   wsWatcher.stop();
+
+  console.log("── ws shadow sampling ──");
+
+  let wsShadowInstance: WsLike | null = null;
+  const shadowWsFactory: WsFactory = () => {
+    const obj: WsLike = {
+      send: () => {},
+      close: () => {},
+      onopen: null,
+      onclose: null,
+      onerror: null,
+      onmessage: null,
+    };
+    wsShadowInstance = obj;
+    return obj;
+  };
+  const shadowWsWatcher = new WsTradeWatcher(
+    "wss://fake",
+    wsRpc as never,
+    [WALLET],
+    async (events) => void wsFetched.push(...events),
+    shadowWsFactory,
+    [WALLET],
+  );
+  shadowWsWatcher.start();
+  wsShadowInstance!.onopen!();
+  // Subscribe id 1 -> WALLET (only wallet). Confirm it.
+  wsShadowInstance!.onmessage!({ data: JSON.stringify({ id: 1, result: 900 }) });
+  expect(shadowWsWatcher.healthy, "shadow watcher subscription confirmed");
+  wsShadowInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 1, result: { value: { signature: "SHADOWS1", err: null } } } }) });
+  wsShadowInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 1, result: { value: { signature: "SHADOWS2", err: null } } } }) });
+  wsShadowInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 1, result: { value: { signature: "SHADOWS3", err: null } } } }) });
+  await sleep(120);
+  expect(wsFetched.filter((e) => e.signature === "SHADOWS1").length === 1, "first shadow notification sampled and fetched");
+  expect(wsFetched.filter((e) => e.signature === "SHADOWS2" || e.signature === "SHADOWS3").length === 0 && shadowWsWatcher.shadowDroppedNotifications === 2, "subsequent shadow notifications within the sample window are dropped");
+  shadowWsWatcher.stop();
 
   await fs.rm(dataDir, { recursive: true, force: true });
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });

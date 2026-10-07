@@ -9,6 +9,9 @@ const log = createLogger("ws");
 const MAX_QUEUE = 500;
 const BATCH_SIZE = 3;
 const MAX_BACKOFF_MS = 30_000;
+/** Shadow wallets are observed via a 1-notification-per-wallet-per-window sample;
+ *  their full firehose would starve the RPC budget of the copying wallets. */
+const SHADOW_SAMPLE_MS = 60_000;
 
 export interface WsLike {
   send(data: string): void;
@@ -45,8 +48,12 @@ export class WsTradeWatcher {
   private subscriptions = new Set<number>();
   private recent = new Set<string>();
   private dropped = 0;
+  private shadowDropped = 0;
   private fetched = 0;
   private decoded = 0;
+  private subWallets = new Map<number, string>();
+  private lastShadowSample = new Map<string, number>();
+  private shadowSet = new Set<string>();
 
   get fetchedTransactions(): number {
     return this.fetched;
@@ -58,6 +65,10 @@ export class WsTradeWatcher {
 
   get droppedNotifications(): number {
     return this.dropped;
+  }
+
+  get shadowDroppedNotifications(): number {
+    return this.shadowDropped;
   }
 
   get healthy(): boolean {
@@ -78,7 +89,10 @@ export class WsTradeWatcher {
     private wallets: string[],
     private onTrades: (events: TradeEvent[]) => Promise<void>,
     private wsFactory: WsFactory = defaultWsFactory,
-  ) {}
+    private shadowWallets: string[] = [],
+  ) {
+    this.shadowSet = new Set(shadowWallets);
+  }
 
   start(): void {
     this.connect();
@@ -96,6 +110,7 @@ export class WsTradeWatcher {
   private connect(): void {
     if (this.stopped) return;
     this.subscriptions.clear();
+    this.subWallets.clear();
     const ws = this.wsFactory(this.url);
     this.ws = ws;
 
@@ -104,10 +119,12 @@ export class WsTradeWatcher {
       // One subscription per wallet: Solana RPCs (incl. Helius) accept only a
       // single address per logsSubscribe call, but many calls per connection.
       for (const w of this.wallets) {
+        const id = this.nextId++;
+        this.subWallets.set(id, w);
         ws.send(
           JSON.stringify({
             jsonrpc: "2.0",
-            id: this.nextId++,
+            id,
             method: "logsSubscribe",
             params: [{ mentions: [w] }, { commitment: "confirmed" }],
           }),
@@ -123,7 +140,7 @@ export class WsTradeWatcher {
           result?: number;
           method?: string;
           error?: unknown;
-          params?: { result?: { value?: { signature?: string; err?: unknown } } };
+          params?: { result?: { value?: { signature?: string; err?: unknown } }; subscription?: number };
         };
         if (msg.error) {
           log.warn(`ws rpc error: ${JSON.stringify(msg.error)}`);
@@ -137,6 +154,17 @@ export class WsTradeWatcher {
         if (msg.method !== "logsNotification") return;
         const value = msg.params?.result?.value;
         if (!value?.signature || value.err) return; // failed tx: nothing to copy
+        // Shadow wallets: sample their firehose instead of fetching every tx.
+        const wallet = msg.params?.subscription != null ? this.subWallets.get(msg.params.subscription) : undefined;
+        if (wallet && this.shadowSet.has(wallet)) {
+          const now = Date.now();
+          const last = this.lastShadowSample.get(wallet) ?? 0;
+          if (now - last < SHADOW_SAMPLE_MS) {
+            this.shadowDropped++;
+            return;
+          }
+          this.lastShadowSample.set(wallet, now);
+        }
         this.enqueue(value.signature);
       } catch (err) {
         log.warn(`bad ws message: ${String(err)}`);
