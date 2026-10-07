@@ -25,6 +25,7 @@ async function main(): Promise<void> {
     stopLossPct: config.stopLossPct,
     dataDir: config.dataDir,
     trackedWallets: config.trackedWallets,
+    shadowWallets: config.shadowWallets,
     notifier,
   });
   await engine.load();
@@ -37,6 +38,8 @@ async function main(): Promise<void> {
       enabled: config.enabled,
       closing,
       lastManualCloseId: engine.state.lastManualCloseId ?? null,
+      shadowWallets: config.shadowWallets.map((w) => short(w)),
+      shadowTradesSkipped: engine.shadowTradesSkipped,
       uptimeSec: Math.round(process.uptime()),
       wallets: config.trackedWallets.map((w) => short(w)),
       wsHealthy: wsWatcher?.healthy ?? false,

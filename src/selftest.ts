@@ -362,6 +362,32 @@ async function main(): Promise<void> {
   expect(secondClose.closed === 1 && secondClose.skipped === 0 && Object.keys(restoredManual.state.positions).length === 0, "new operation id closes previously unpriced position");
   expect(approx(restoredManual.capital(), 100 + manualPnl) && manualAlerts.length === 2, "manual liquidation reconciles cash and notifies for both winning and losing closes");
 
+  const shadowDir = `${dataDir}-shadow`;
+  const shadowAlerts: string[] = [];
+  const shadowEngine = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: shadowDir,
+    trackedWallets: [WALLET],
+    shadowWallets: [WALLET],
+    pairProvider: async (mint) => prices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+    notifier: { send: async (t) => void shadowAlerts.push(t) },
+  });
+  await shadowEngine.load();
+  await shadowEngine.onTrades([ev({ signature: "SHADOW_BUY" })]);
+  expect(!shadowEngine.state.positions[`${WALLET}:${MINT_A}`] && approx(shadowEngine.state.cashUsd, 1000), "shadow wallet buy deploys no capital");
+  expect(shadowEngine.ledger.length === 0 && shadowEngine.shadowTradesSkipped === 1, "shadow wallet trade is counted but not ledgered");
+  await shadowEngine.onTrades([ev({ signature: "SHADOW_SELL", side: "sell", tokenDelta: 100, remainingTokens: 0 })]);
+  expect(shadowEngine.ledger.length === 0 && shadowAlerts.length === 0, "shadow wallet sell is ignored without position");
+  const shadowRows = await shadowEngine.walletRankings();
+  expect(shadowRows.length === 1 && shadowRows[0]!.dayTrades === 0, "shadow wallet stays in rankings with zero activity");
+
   console.log("── watcher cursor ──");
 
   const fetched: TradeEvent[] = [];
@@ -479,6 +505,7 @@ async function main(): Promise<void> {
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-manual`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-shadow`, { recursive: true, force: true });
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

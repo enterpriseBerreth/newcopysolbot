@@ -21,6 +21,9 @@ export interface EngineOpts {
   stopLossPct: number;
   dataDir: string;
   trackedWallets?: string[];
+  /** Wallets to observe without deploying capital: trades are decoded and
+   *  logged, exits on pre-existing positions still mirror, but no new buys. */
+  shadowWallets?: string[];
   pairProvider?: PairProvider;
   solPriceProvider?: () => Promise<number>;
   notifier?: NotifierLike;
@@ -43,9 +46,13 @@ export class PaperEngine {
   private seq = 0;
   private processing: Promise<void> = Promise.resolve();
   private completedTransactions = new Set<string>();
+  private shadow = new Set<string>();
+
+  shadowTradesSkipped = 0;
 
   constructor(private opts: EngineOpts) {
     this.state = defaultState(opts.startingBudgetUsd);
+    this.shadow = new Set(opts.shadowWallets ?? []);
     this.pair = opts.pairProvider ?? getPairInfo;
     this.solPrice = opts.solPriceProvider ?? getSolPriceUsd;
     this.notifier = opts.notifier ?? { send: async () => {} };
@@ -129,6 +136,11 @@ export class PaperEngine {
   }
 
   private async handleTrade(ev: TradeEvent): Promise<void> {
+    if (ev.side === "buy" && this.shadow.has(ev.wallet)) {
+      this.shadowTradesSkipped++;
+      log.info(`SHADOW skip buy: ${short(ev.wallet)} ${ev.mint.slice(0, 8)}… qty ${ev.tokenDelta.toPrecision(6)} (shadow wallet, no capital deployed)`);
+      return;
+    }
     const info = await this.pair(ev.mint);
     const marketPrice = info?.priceUsd ?? 0;
     if (!marketPrice) {
@@ -258,6 +270,7 @@ export class PaperEngine {
     const key = `${ev.wallet}:${ev.mint}`;
     const pos = this.state.positions[key];
     if (!pos) {
+      if (this.shadow.has(ev.wallet)) return; // shadow wallets never hold positions; stay quiet
       log.info(`sell with no position: ${short(ev.wallet)} ${symbol} (missed entry or already closed)`);
       return;
     }

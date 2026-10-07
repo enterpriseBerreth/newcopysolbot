@@ -58,6 +58,15 @@ export const config = {
 
   dataDir: str("DATA_DIR", "data"),
   manualCloseId: str("MANUAL_CLOSE_ID", ""),
+  // Shadow wallets: monitored (cursor, decode, rankings) but never funded.
+  shadowWallets: [
+    ...new Set(
+      str("SHADOW_WALLETS", "")
+        .split(",")
+        .map((w) => w.trim())
+        .filter(Boolean),
+    ),
+  ],
 
   telegramBotToken: str("TELEGRAM_BOT_TOKEN", ""),
   telegramChatId: str("TELEGRAM_CHAT_ID", ""),
