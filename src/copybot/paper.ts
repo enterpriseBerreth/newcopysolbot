@@ -14,6 +14,9 @@ const log = createLogger("paper");
 export interface EngineOpts {
   startingBudgetUsd: number;
   clipPct: number;
+  premiumWallets?: string[];
+  premiumClipPct?: number;
+  premiumFallbackClipPct?: number;
   minWalletTradeUsd: number;
   maxPositions: number;
   entrySlippagePct: number;
@@ -61,6 +64,7 @@ export class PaperEngine {
   private processing: Promise<void> = Promise.resolve();
   private completedTransactions = new Set<string>();
   private shadow = new Set<string>();
+  private premium = new Set<string>();
   private liquidityFloor: number;
   private killPnl: number;
   private killMinSells: number;
@@ -72,6 +76,7 @@ export class PaperEngine {
   constructor(private opts: EngineOpts) {
     this.state = defaultState(opts.startingBudgetUsd);
     this.shadow = new Set(opts.shadowWallets ?? []);
+    this.premium = new Set(opts.premiumWallets ?? []);
     this.liquidityFloor = opts.liquidityFloorUsd ?? 25_000;
     this.killPnl = opts.killSwitchPnlUsd ?? -50;
     this.killMinSells = opts.killSwitchMinSells ?? 20;
@@ -268,7 +273,14 @@ export class PaperEngine {
       );
       return;
     }
-    const ourUsd = (walletNotional * this.opts.clipPct) / 100;
+    const premium = this.premium.has(ev.wallet);
+    const primaryPct = premium ? (this.opts.premiumClipPct ?? 10) : this.opts.clipPct;
+    const fallbackPct = premium ? (this.opts.premiumFallbackClipPct ?? 5) : primaryPct;
+    const primaryUsd = (walletNotional * primaryPct) / 100;
+    const fallbackUsd = (walletNotional * fallbackPct) / 100;
+    const useFallback = premium && this.state.cashUsd < primaryUsd;
+    const ourUsd = useFallback ? fallbackUsd : primaryUsd;
+    const appliedPct = useFallback ? fallbackPct : primaryPct;
     const key = `${ev.wallet}:${ev.mint}`;
     const existing = this.state.positions[key];
 
@@ -328,7 +340,7 @@ export class PaperEngine {
     };
     await this.appendLedger(trade);
     log.info(
-      `BUY ${symbol}: ${short(ev.wallet)} spent ~$${walletNotional.toFixed(0)} -> we clip $${ourUsd.toFixed(2)} ` +
+      `BUY ${symbol}: ${short(ev.wallet)} spent ~$${walletNotional.toFixed(0)} -> we clip ${appliedPct}% ($${ourUsd.toFixed(2)}) ` +
         `@ $${fillPrice.toPrecision(6)} (qty ${qty.toPrecision(6)}), cash $${this.state.cashUsd.toFixed(2)}`,
     );
     // No Telegram alert for entries: only CLOSED trades alert.

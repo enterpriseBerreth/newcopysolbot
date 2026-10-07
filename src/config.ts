@@ -36,6 +36,12 @@ export const config = {
 
   // Copy sizing: our entry = CLIP_PCT% of the copied wallet's trade notional.
   clipPct: num("CLIP_PCT", 1),
+  premiumWallets: str(
+    "PREMIUM_CLIP_WALLETS",
+    "29yFzeBZgxf5zqrAkKXwgZtQehRf4pL8WbV2nRJikbw8,9BMzTpSo4URse1oN666pmexhdjpU1vA5p7LtroCFQdLU,CHCLtC1AWpSshZkiU8TNoNn9r7CHecVhTakuao7u4aBX",
+  ).split(",").map((wallet) => wallet.trim()).filter(Boolean),
+  premiumClipPct: num("PREMIUM_CLIP_PCT", 10),
+  premiumFallbackClipPct: num("PREMIUM_FALLBACK_CLIP_PCT", 5),
   // Ignore copied trades whose notional is below this. Data shows wallet trades
   // under ~$200 are overwhelmingly unprofitable to copy; >=$500 trades are net positive.
   minWalletTradeUsd: num("MIN_WALLET_TRADE_USD", 200),

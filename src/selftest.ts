@@ -313,6 +313,63 @@ async function main(): Promise<void> {
   expect(approx(poorEngine.state.cashUsd, 0.5, 1e-9), "cash untouched when skipping unaffordable buy");
   expect(poorSent.length === 0, "no alert for skipped entry");
   expect((await poorEngine.walletRankings()).length === 2, "rankings include wallets with no paper trades");
+
+  const premiumWallets = [
+    "29yFzeBZgxf5zqrAkKXwgZtQehRf4pL8WbV2nRJikbw8",
+    "9BMzTpSo4URse1oN666pmexhdjpU1vA5p7LtroCFQdLU",
+    "CHCLtC1AWpSshZkiU8TNoNn9r7CHecVhTakuao7u4aBX",
+  ];
+  const premiumOpts = {
+    clipPct: 1,
+    premiumWallets,
+    premiumClipPct: 10,
+    premiumFallbackClipPct: 5,
+    minWalletTradeUsd: 200,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    pairProvider: async (mint: string) => prices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  };
+  const premiumDir = `${dataDir}-premium`;
+  const premiumEngine = new PaperEngine({ ...premiumOpts, startingBudgetUsd: 1_000, dataDir: premiumDir });
+  await premiumEngine.load();
+  for (const [index, wallet] of premiumWallets.entries()) {
+    await premiumEngine.onTrades([ev({ signature: `PREMIUM-${index}`, wallet, tokenDelta: 1_000, remainingTokens: 1_000 })]);
+    expect(approx(premiumEngine.state.positions[`${wallet}:${MINT_A}`]!.costUsd, 100), `premium wallet ${index + 1} copies 10% of $1,000`);
+  }
+  const ordinaryWallet = "OrdinaryWallet11111111111111111111111111111";
+  await premiumEngine.onTrades([ev({ signature: "ORDINARY", wallet: ordinaryWallet, tokenDelta: 1_000 })]);
+  expect(approx(premiumEngine.state.positions[`${ordinaryWallet}:${MINT_A}`]!.costUsd, 10), "non-premium wallet remains on 1% clips");
+
+  const exactEngine = new PaperEngine({ ...premiumOpts, startingBudgetUsd: 100, dataDir: `${dataDir}-premium-exact` });
+  await exactEngine.load();
+  await exactEngine.onTrades([ev({ signature: "EXACT", wallet: premiumWallets[1], tokenDelta: 1_000 })]);
+  expect(approx(exactEngine.state.cashUsd, 0), "premium 10% clip uses exact available cash");
+
+  const fallbackEngine = new PaperEngine({ ...premiumOpts, startingBudgetUsd: 75, dataDir: `${dataDir}-premium-fallback` });
+  await fallbackEngine.load();
+  await fallbackEngine.onTrades([ev({ signature: "FALLBACK", wallet: premiumWallets[2], tokenDelta: 1_000 })]);
+  expect(approx(fallbackEngine.state.cashUsd, 25) && approx(fallbackEngine.state.positions[`${premiumWallets[2]}:${MINT_A}`]!.clipUsd, 50), "premium 10% unaffordable falls back to 5% first clip");
+  await fallbackEngine.onTrades([ev({ signature: "TOO-POOR", wallet: premiumWallets[0], tokenDelta: 1_000 })]);
+  expect(approx(fallbackEngine.state.cashUsd, 25) && !fallbackEngine.state.positions[`${premiumWallets[0]}:${MINT_A}`], "premium buy is skipped when even 5% is unaffordable");
+
+  const cappedPremium = new PaperEngine({ ...premiumOpts, startingBudgetUsd: 260, dataDir: `${dataDir}-premium-cap` });
+  await cappedPremium.load();
+  await cappedPremium.onTrades([ev({ signature: "CAP-1", wallet: premiumWallets[0], tokenDelta: 1_000 })]);
+  await cappedPremium.onTrades([ev({ signature: "CAP-2", wallet: premiumWallets[0], tokenDelta: 1_000 })]);
+  await cappedPremium.onTrades([ev({ signature: "CAP-3", wallet: premiumWallets[0], tokenDelta: 1_000 })]);
+  expect(approx(cappedPremium.state.positions[`${premiumWallets[0]}:${MINT_A}`]!.costUsd, 200) && approx(cappedPremium.state.cashUsd, 60), "top-up cap blocks fallback beyond 2x first premium clip");
+
+  const premiumTopUp = new PaperEngine({ ...premiumOpts, startingBudgetUsd: 175, dataDir: `${dataDir}-premium-topup` });
+  await premiumTopUp.load();
+  await premiumTopUp.onTrades([ev({ signature: "TOPUP-1", wallet: premiumWallets[0], tokenDelta: 1_000 })]);
+  await premiumTopUp.onTrades([ev({ signature: "TOPUP-2", wallet: premiumWallets[0], tokenDelta: 1_000 })]);
+  expect(approx(premiumTopUp.state.positions[`${premiumWallets[0]}:${MINT_A}`]!.costUsd, 150) && approx(premiumTopUp.state.cashUsd, 25), "premium top-up falls back to 5% within cap");
+  await premiumTopUp.onTrades([ev({ signature: "PREMIUM-EXIT", wallet: premiumWallets[0], side: "sell", tokenDelta: 500, remainingTokens: 500 })]);
+  expect(approx(premiumTopUp.state.positions[`${premiumWallets[0]}:${MINT_A}`]!.costUsd, 75), "premium exit mirrors sold fraction and leaves proportional cost basis");
+
   const tinyDir = `${dataDir}-tiny`;
   const tinyEngine = new PaperEngine({
     startingBudgetUsd: 100,
@@ -803,6 +860,9 @@ async function main(): Promise<void> {
 
   await fs.rm(dataDir, { recursive: true, force: true });
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });
+  for (const name of ["premium", "premium-exact", "premium-fallback", "premium-cap", "premium-topup"]) {
+    await fs.rm(`${dataDir}-${name}`, { recursive: true, force: true });
+  }
   await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-manual`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-shadow`, { recursive: true, force: true });
