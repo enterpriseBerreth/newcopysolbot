@@ -52,6 +52,7 @@ export class WsTradeWatcher {
   private fetched = 0;
   private decoded = 0;
   private subWallets = new Map<number, string>();
+  private reqWallets = new Map<number, string>();
   private lastShadowSample = new Map<string, number>();
   private shadowSet = new Set<string>();
 
@@ -111,6 +112,7 @@ export class WsTradeWatcher {
     if (this.stopped) return;
     this.subscriptions.clear();
     this.subWallets.clear();
+    this.reqWallets.clear();
     const ws = this.wsFactory(this.url);
     this.ws = ws;
 
@@ -120,7 +122,7 @@ export class WsTradeWatcher {
       // single address per logsSubscribe call, but many calls per connection.
       for (const w of this.wallets) {
         const id = this.nextId++;
-        this.subWallets.set(id, w);
+        this.reqWallets.set(id, w);
         ws.send(
           JSON.stringify({
             jsonrpc: "2.0",
@@ -148,6 +150,10 @@ export class WsTradeWatcher {
         }
         if (typeof msg.id === "number" && typeof msg.result === "number") {
           this.subscriptions.add(msg.id);
+          // The confirmation's `result` is the server-assigned subscription id
+          // that notifications will reference in params.subscription.
+          const wallet = this.reqWallets.get(msg.id);
+          if (wallet) this.subWallets.set(msg.result, wallet);
           if (this.healthy) log.info(`all ${this.wallets.length} wallet subscriptions confirmed`);
           return;
         }
