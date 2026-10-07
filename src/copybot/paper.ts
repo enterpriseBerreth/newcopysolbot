@@ -124,6 +124,9 @@ export class PaperEngine {
         lastSigByWallet: saved.lastSigByWallet ?? {},
         processedSigs: saved.processedSigs ?? [],
         lastManualCloseId: saved.lastManualCloseId,
+        // Preserve the reset marker across restarts; otherwise the next boot
+        // would re-trigger the reset and archive the live account.
+        lastResetId: saved.lastResetId ?? this.state.lastResetId,
       };
       log.info(
         `restored: cash $${this.state.cashUsd.toFixed(2)}, ${Object.keys(this.state.positions).length} position(s), ` +

@@ -172,7 +172,8 @@ async function main(): Promise<void> {
 
   // Bot-wallet check: on every boot, analyze tracked wallets not yet in the
   // registry (i.e. newly added ones). Bot-like wallets trigger one Telegram
-  // alert; each wallet is only flagged once.
+  // alert; each wallet is only flagged once. Delayed so the boot-time RPC
+  // burst (watcher init) doesn't collide with the analysis calls.
   const botRegistryFile = path.join(config.dataDir, "bot-analysis.json");
   let botRegistry: BotRegistry = {};
   try {
@@ -180,17 +181,20 @@ async function main(): Promise<void> {
   } catch {
     /* first run: no registry yet */
   }
-  void runBotCheck(
-    rpc,
-    config.trackedWallets,
-    botRegistry,
-    async (reg) => {
-      const tmp = `${botRegistryFile}.tmp`;
-      await fs.writeFile(tmp, JSON.stringify(reg));
-      await fs.rename(tmp, botRegistryFile);
-    },
-    (text) => notifier.send(text),
-  ).catch((err) => log.error(`bot check failed: ${String(err)}`));
+  const botCheckTimer = setTimeout(() => {
+    void runBotCheck(
+      rpc,
+      config.trackedWallets,
+      botRegistry,
+      async (reg) => {
+        const tmp = `${botRegistryFile}.tmp`;
+        await fs.writeFile(tmp, JSON.stringify(reg));
+        await fs.rename(tmp, botRegistryFile);
+      },
+      (text) => notifier.send(text),
+    ).catch((err) => log.error(`bot check failed: ${String(err)}`));
+  }, 90_000);
+  botCheckTimer.unref();
 
   // Stop-loss marking loop.
   let marking = false;

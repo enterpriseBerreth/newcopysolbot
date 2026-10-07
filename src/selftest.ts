@@ -788,6 +788,19 @@ async function main(): Promise<void> {
   await resetGen4.load();
   expect(approx(resetGen4.state.cashUsd, 1000) && resetGen4.ledger.length === 0, "reset id is idempotent: no re-archival on next boot");
 
+  // Regression: a restart that only LOADS (crash/redeploy) must not drop the
+  // reset marker — otherwise the next boot re-archives the live account.
+  const resetGen5 = new PaperEngine({ ...resetOpts, resetId: "reset-r2" });
+  await resetGen5.load();
+  await resetGen5.onTrades([ev({ signature: "R2" })]);
+  await resetGen5.save();
+  const resetGen6 = new PaperEngine({ ...resetOpts, resetId: "reset-r2" });
+  await resetGen6.load();
+  await resetGen6.save(); // the load→save cycle that used to drop lastResetId
+  const resetGen7 = new PaperEngine({ ...resetOpts, resetId: "reset-r2" });
+  await resetGen7.load();
+  expect(approx(resetGen7.state.cashUsd, 999) && resetGen7.ledger.length === 1, "load/save cycle preserves lastResetId: no spurious re-reset");
+
   await fs.rm(dataDir, { recursive: true, force: true });
   await fs.rm(`${dataDir}-poor`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });
