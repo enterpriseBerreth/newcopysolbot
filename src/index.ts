@@ -176,9 +176,9 @@ async function main(): Promise<void> {
     () => !wsWatcher?.healthy,
     (wallet, signature) => Boolean(wsWatcher?.hasSeen(signature) || engine.hasProcessed(wallet, signature)),
   );
+  wsWatcher?.start();
   await watcher.start();
   await engine.save();
-  wsWatcher?.start();
 
   // Bot-wallet check: on every boot, analyze tracked wallets not yet in the
   // registry (i.e. newly added ones). Bot-like wallets trigger one Telegram

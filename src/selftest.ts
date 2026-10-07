@@ -6,7 +6,8 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { LAMPORTS_PER_SOL } from "./copybot/constants.js";
+import { DEFAULT_WALLETS, LAMPORTS_PER_SOL } from "./copybot/constants.js";
+import { config } from "./config.js";
 import { classifySignatures, type SignatureRow } from "./copybot/botwatch.js";
 import { extractTrades } from "./copybot/decoder.js";
 import { PaperEngine, splitShadowEvents } from "./copybot/paper.js";
@@ -81,6 +82,21 @@ function makeTx(opts: TxOpts): JsonTransaction {
 }
 
 async function main(): Promise<void> {
+  console.log("── wallet roster ──");
+  const newWallets = [
+    "9aztChMYbsF5HRFG2ECkjfEdHHZChB1b3tRHQ2TPgKjv",
+    "2dE3XMa3y4um1XXstv1ZUdNk96NctLW1cP5ewnLBUsRV",
+    "8UfkYXd2cSE8CXmcfnbtF7DcgUeJJoQpt2TmSHrkCvD6",
+    "Fpf2DJPM3n7LB9RWKaZ2zQ3KRcVWACHXpjngBNS99Q2H",
+    "136MvvCwqUA8DJmVS38WYyrXaRJzSPcWy5gmM27Y4FKt",
+    "8Ltv5royXzxVG3tAhVhRnfXrzapS5Dwqt1ocxprgu6YP",
+    "8ZN71XTdVo8yRovnGLmNgW3Tgniw6A4J3JGLvPD686FP",
+  ];
+  const roster = DEFAULT_WALLETS.split(",");
+  expect(roster.length === 23 && new Set(roster).size === 23, "wallet roster contains 23 unique addresses");
+  expect(newWallets.every((wallet) => roster.includes(wallet) && !config.premiumWallets.includes(wallet) && !config.shadowWallets.includes(wallet)), "all seven added wallets are standard 1% live wallets");
+  expect(config.clipPct === 1, "standard clip remains 1% for new wallets");
+
   console.log("── decoder ──");
 
   const buyTx = makeTx({
@@ -367,6 +383,8 @@ async function main(): Promise<void> {
   const ordinaryWallet = "OrdinaryWallet11111111111111111111111111111";
   await premiumEngine.onTrades([ev({ signature: "ORDINARY", wallet: ordinaryWallet, tokenDelta: 1_000 })]);
   expect(approx(premiumEngine.state.positions[`${ordinaryWallet}:${MINT_A}`]!.costUsd, 10), "non-premium wallet remains on 1% clips");
+  await premiumEngine.onTrades([ev({ signature: "NEW-STANDARD", wallet: newWallets[0], tokenDelta: 1_000 })]);
+  expect(approx(premiumEngine.state.positions[`${newWallets[0]}:${MINT_A}`]!.costUsd, 10), "newly added wallet copies at 1%, not the premium tier");
 
   const exactEngine = new PaperEngine({ ...premiumOpts, startingBudgetUsd: 100, dataDir: `${dataDir}-premium-exact` });
   await exactEngine.load();
