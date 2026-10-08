@@ -11,6 +11,7 @@ import { config } from "./config.js";
 import { classifySignatures, type SignatureRow } from "./copybot/botwatch.js";
 import { extractTrades } from "./copybot/decoder.js";
 import { PaperEngine, splitShadowEvents } from "./copybot/paper.js";
+import { TelegramNotifier, splitTelegramMessage } from "./copybot/notifier.js";
 import type { NotifierLike } from "./copybot/notifier.js";
 import type { JsonTransaction, JsonTokenBalance } from "./copybot/rpc.js";
 import { SolRpc, sleep } from "./copybot/rpc.js";
@@ -691,6 +692,29 @@ async function main(): Promise<void> {
     expect(batched[0]?.transaction.signatures[0] === "RPC-E" && batched[1]?.transaction.signatures[0] === "RPC-F", "batch-capable RPC preserves response ordering by id");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+
+  console.log("── telegram report delivery ──");
+
+  const longReport = Array.from({ length: 80 }, (_, index) => `Wallet ${index + 1}: +$123.45 | 12 trades | 6 wins / 6 losses | shadow +$10.00`).join("\n");
+  const reportChunks = splitTelegramMessage(longReport);
+  expect(reportChunks.length > 1 && reportChunks.every((chunk) => chunk.length <= 3500) && reportChunks.join("") === longReport, "long rankings split without losing or reordering wallet lines");
+  expect(splitTelegramMessage("A".repeat(7200)).join("") === "A".repeat(7200) && splitTelegramMessage("A".repeat(7200)).every((chunk) => chunk.length <= 3500), "even an oversized single line is split safely");
+  const telegramFetch = globalThis.fetch;
+  const deliveredChunks: string[] = [];
+  try {
+    globalThis.fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { text: string };
+      deliveredChunks.push(body.text);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+    const telegram = new TelegramNotifier("fake-token", "fake-chat");
+    expect(await telegram.sendReport(longReport) && deliveredChunks.join("") === longReport, "report sends every chunk in order and reports successful delivery");
+    globalThis.fetch = async () => new Response(JSON.stringify({ ok: false }), { status: 400 });
+    expect(!(await telegram.sendReport(longReport)), "Telegram HTTP rejection is reported instead of falsely logging report sent");
+    expect(!(await new TelegramNotifier("", "").sendReport("offline")), "disabled notifier does not claim successful report delivery");
+  } finally {
+    globalThis.fetch = telegramFetch;
   }
 
   console.log("── watcher cursor ──");

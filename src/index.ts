@@ -220,17 +220,26 @@ async function main(): Promise<void> {
 
   // Ranking reports at each configured UTC hour (default: 12am + 12pm GMT-6).
   const lastReportKey = new Set<string>();
+  let reporting = false;
   const reportTimer = setInterval(() => {
     const now = new Date();
     const hour = now.getUTCHours();
-    if (!config.reportHoursUtc.includes(hour)) return;
+    if (!config.reportHoursUtc.includes(hour) || !notifier.enabled) return;
     const key = `${now.toISOString().slice(0, 10)}-${hour}`;
-    if (lastReportKey.has(key)) return;
-    lastReportKey.add(key);
+    if (lastReportKey.has(key) || reporting) return;
+    reporting = true;
     buildMergedRankings()
-      .then((rows) => notifier.send(engine.formatRankings(rows)))
-      .then(() => log.info(`ranking report sent (hour ${hour} UTC)`))
-      .catch((err) => log.error(`ranking report failed: ${String(err)}`));
+      .then((rows) => notifier.sendReport(engine.formatRankings(rows)))
+      .then((sent) => {
+        if (sent) {
+          lastReportKey.add(key);
+          log.info(`ranking report sent (hour ${hour} UTC)`);
+        } else {
+          log.warn(`ranking report delivery failed (hour ${hour} UTC); retrying`);
+        }
+      })
+      .catch((err) => log.error(`ranking report failed: ${String(err)}`))
+      .finally(() => { reporting = false; });
   }, 30_000);
   reportTimer.unref();
 
