@@ -476,18 +476,21 @@ export class PaperEngine {
   }
 
   private async markPositions(): Promise<void> {
-    const stops: Array<{ pos: Position; priceUsd: number }> = [];
+    const closes: Array<{ pos: Position; priceUsd: number; reason: string }> = [];
     for (const pos of Object.values(this.state.positions)) {
       const info = await this.pair(pos.mint);
       if (!info?.priceUsd) continue;
+      if (this.shadow.has(pos.wallet)) {
+        closes.push({ pos, priceUsd: info.priceUsd, reason: "shadow migration" });
+        continue;
+      }
       const entryPrice = pos.costUsd / pos.qty;
       const pnlPct = ((info.priceUsd - entryPrice) / entryPrice) * 100;
-      if (this.opts.stopLossPct > 0 && pnlPct <= -this.opts.stopLossPct) stops.push({ pos, priceUsd: info.priceUsd });
+      if (this.opts.stopLossPct > 0 && pnlPct <= -this.opts.stopLossPct) closes.push({ pos, priceUsd: info.priceUsd, reason: "stop-loss" });
     }
-    for (const { pos, priceUsd } of stops) {
-      await this.forceClose(pos, "stop-loss", priceUsd);
+    for (const { pos, priceUsd, reason } of closes) {
+      await this.forceClose(pos, reason, priceUsd);
     }
-    if (stops.length > 0) await this.save();
   }
 
   private async forceClose(pos: Position, reason: string, marketPrice?: number): Promise<void> {

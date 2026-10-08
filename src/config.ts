@@ -38,7 +38,7 @@ export const config = {
   clipPct: num("CLIP_PCT", 1),
   premiumWallets: str(
     "PREMIUM_CLIP_WALLETS",
-    "29yFzeBZgxf5zqrAkKXwgZtQehRf4pL8WbV2nRJikbw8,9BMzTpSo4URse1oN666pmexhdjpU1vA5p7LtroCFQdLU,CHCLtC1AWpSshZkiU8TNoNn9r7CHecVhTakuao7u4aBX",
+    "29yFzeBZgxf5zqrAkKXwgZtQehRf4pL8WbV2nRJikbw8,CHCLtC1AWpSshZkiU8TNoNn9r7CHecVhTakuao7u4aBX",
   ).split(",").map((wallet) => wallet.trim()).filter(Boolean),
   premiumClipPct: num("PREMIUM_CLIP_PCT", 10),
   premiumFallbackClipPct: num("PREMIUM_FALLBACK_CLIP_PCT", 5),
@@ -88,7 +88,18 @@ export const config = {
   // Shadow wallets: monitored (cursor, decode, rankings) but never funded.
   shadowWallets: [
     ...new Set(
-      str("SHADOW_WALLETS", "")
+      str("SHADOW_WALLETS", [
+        "EeXvxkcGqMDZeTaVeawzxm9mbzZwqDUMmfG3bF7uzumH",
+        "AimUs5AnmPfyCzDdUhvz4BTvb2fGsNonAb8uuSyHByw9",
+        "ardinRsN1mNYVeoJWTBsWeYeXvuR9UUDGMsCDKpb6AT",
+        "DkjBeKvadAtE3d8ZBvhp1AhmqBdzTM6URUUXgKKjGeQQ",
+        "3bzaJd5yZG73EVDz8xosQb7gfZm2LN5auFGh6wnP1n1f",
+        "9LXWa7V3AE15VfBupcx5gDts2ix3Y9NzbcKZKjkkq6hV",
+        "9BMzTpSo4URse1oN666pmexhdjpU1vA5p7LtroCFQdLU",
+        "4b3ZctHLzPBQt3biFbDWp12hf6ADkaruQx4aj9kiDQKh",
+        "Fpf2DJPM3n7LB9RWKaZ2zQ3KRcVWACHXpjngBNS99Q2H",
+        "GijFWw4oNyh9ko3FaZforNsi3jk6wDovARpkKahPD4o5",
+      ].join(","))
         .split(",")
         .map((w) => w.trim())
         .filter(Boolean),

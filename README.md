@@ -6,13 +6,14 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 
 1. **Wallet watching** — subscribes to each wallet over Solana WebSocket when configured; HTTP polling runs when subscriptions are unavailable. Every notification still needs an HTTP transaction fetch, so RPC quotas and backlog can cause missed trades.
 2. **Trade detection** — balance-diff decoding for known DEX programs (Raydium, Pump.fun, Jupiter, Meteora, Orca, etc.). Plain transfers without a known DEX program are ignored.
-3. **Copy sizing** — the three premium wallets (29yF, 9BMz, CHCL) use a 10% clip of their trade notional when cash, top-up and exposure limits permit, otherwise a 5% clip if it fits; other wallets use 1%. Buys below $200 copied-wallet notional are skipped. Exposure per copied wallet and per token is capped at 15% of paper capital; existing oversized positions can still exit.
-4. **Exits mirrored** — when a wallet sells X% of its bag, we sell X% of our position; profits refill paper cash.
-5. **Paper fills** — the copied wallet's SOL leg estimates its trade notional for clip sizing. Our paper entry/exit uses the available market price at detection, not the wallet's earlier execution price, plus entry/exit slippage.
-6. **Stop loss** — open positions are re-marked every 30s and force-closed when down 40%. Rapid price gaps can exceed this threshold.
-7. **Wallet rankings** — realized PnL, trade counts and positive/negative closed trades per copied wallet. Ranked reports are sent via Telegram at **12:00am and 12:00pm** (default hours 06:00/18:00 UTC = midnight/noon GMT-6, configurable via `REPORT_HOURS_UTC`) and exposed on `/rankings`.
-8. **Closed-trade alerts** — Telegram message after every closed trade with the copied wallet, token address/name, capital before → after, and PnL in $ and %. Entries send nothing.
-9. **Compounding** — capital = idle cash + deployed positions; all realized profits return to cash and are reused for new entries.
+3. **Copy sizing** — two premium wallets (29yF, CHCL) use a 10% clip of their trade notional when cash, top-up and exposure limits permit, otherwise a 5% clip if it fits; other live wallets use 1%. Buys below $200 copied-wallet notional are skipped. Exposure per copied wallet and per token is capped at 15% of paper capital.
+4. **Shadow mode** — ten tracked wallets (EeXv, AimU, ardi, DkjB, 3bza, 9LXW, 9BMz, 4b3Z, Fpf2, GijF) are monitored and simulated separately without new live paper buys. Previously opened live paper positions are closed at the next available mark, realized into cash, and reported as closed trades.
+5. **Exits mirrored** — when a wallet sells X% of its bag, we sell X% of our position; profits refill paper cash.
+6. **Paper fills** — the copied wallet's SOL leg estimates its trade notional for clip sizing. Our paper entry/exit uses the available market price at detection, not the wallet's earlier execution price, plus entry/exit slippage.
+7. **Stop loss** — open positions are re-marked every 30s and force-closed when down 40%. Rapid price gaps can exceed this threshold.
+8. **Wallet rankings** — realized PnL, trade counts and positive/negative closed trades per copied wallet. Ranked reports are sent via Telegram at **12:00am and 12:00pm** (default hours 06:00/18:00 UTC = midnight/noon GMT-6, configurable via `REPORT_HOURS_UTC`) and exposed on `/rankings`.
+9. **Closed-trade alerts** — Telegram message after every closed trade with the copied wallet, token address/name, capital before → after, and PnL in $ and %. Entries send nothing.
+10. **Compounding** — capital = idle cash + deployed positions; all realized profits return to cash and are reused for new entries.
 
 ## Parameters (env)
 
@@ -22,7 +23,8 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 | `SOLANA_WS_URL` | — | WebSocket endpoint (e.g. Helius) for push-based capture; polling stays on as fallback |
 | `TRACKED_WALLETS` | starter list | Comma-separated wallets to copy |
 | `CLIP_PCT` | `1` | Standard entry as % of copied wallet's trade notional |
-| `PREMIUM_CLIP_WALLETS` | 29yF, 9BMz, CHCL | Wallets eligible for 10% then 5% fallback clips |
+| `PREMIUM_CLIP_WALLETS` | 29yF, CHCL | Live wallets eligible for 10% then 5% fallback clips |
+| `SHADOW_WALLETS` | 10 listed above | Tracked wallets simulated separately; existing live paper positions close at next available mark |
 | `MAX_EXPOSURE_PCT` | `15` | Max cost basis per wallet and per token as % of paper capital; 0 disables |
 | `MIN_WALLET_TRADE_USD` | `200` | Skip copied-wallet buys below this notional |
 | `STARTING_BUDGET_USD` | `1000` (production) | Paper budget; persisted accounts retain their current balance |

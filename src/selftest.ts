@@ -94,8 +94,17 @@ async function main(): Promise<void> {
   ];
   const roster = DEFAULT_WALLETS.split(",");
   expect(roster.length === 23 && new Set(roster).size === 23, "wallet roster contains 23 unique addresses");
-  expect(newWallets.every((wallet) => roster.includes(wallet) && !config.premiumWallets.includes(wallet) && !config.shadowWallets.includes(wallet)), "all seven added wallets are standard 1% live wallets");
+  expect(newWallets.every((wallet) => roster.includes(wallet) && !config.premiumWallets.includes(wallet)) && newWallets.filter((wallet) => config.shadowWallets.includes(wallet)).join() === "Fpf2DJPM3n7LB9RWKaZ2zQ3KRcVWACHXpjngBNS99Q2H", "all seven added wallets remain tracked; Fpf2 alone moved from live 1% to shadow");
   expect(config.clipPct === 1, "standard clip remains 1% for new wallets");
+  const movedToShadow = [
+    "9LXWa7V3AE15VfBupcx5gDts2ix3Y9NzbcKZKjkkq6hV",
+    "9BMzTpSo4URse1oN666pmexhdjpU1vA5p7LtroCFQdLU",
+    "4b3ZctHLzPBQt3biFbDWp12hf6ADkaruQx4aj9kiDQKh",
+    "Fpf2DJPM3n7LB9RWKaZ2zQ3KRcVWACHXpjngBNS99Q2H",
+    "GijFWw4oNyh9ko3FaZforNsi3jk6wDovARpkKahPD4o5",
+  ];
+  expect(movedToShadow.every((wallet) => roster.includes(wallet) && config.shadowWallets.includes(wallet) && !config.premiumWallets.includes(wallet)), "five requested wallets stay tracked but are shadow-only, not premium");
+  expect(config.shadowWallets.length === 10 && new Set(config.shadowWallets).size === 10, "all original and newly shadowed wallets are present exactly once");
 
   console.log("── decoder ──");
 
@@ -517,6 +526,45 @@ async function main(): Promise<void> {
   expect(shadowEngine.ledger.length === 0 && shadowAlerts.length === 0, "shadow wallet sell is ignored without position");
   const shadowRows = await shadowEngine.walletRankings();
   expect(shadowRows.length === 1 && shadowRows[0]!.dayTrades === 0, "shadow wallet stays in rankings with zero activity");
+
+  const migrationDir = `${dataDir}-migration`;
+  const migrationPrices = new Map<string, PairInfo>(prices);
+  migrationPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  const migrationAlerts: string[] = [];
+  const migrationOpts = {
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: migrationDir,
+    pairProvider: async (mint: string) => migrationPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+    notifier: { send: async (text: string) => void migrationAlerts.push(text) },
+  };
+  const beforeMigration = new PaperEngine(migrationOpts);
+  await beforeMigration.load();
+  await beforeMigration.onTrades([ev({ signature: "MIGRATE-OLD" }), ev({ signature: "MIGRATE-OTHER", wallet: SPAM_WALLET, mint: MINT_B })]);
+  const migrating = new PaperEngine({ ...migrationOpts, shadowWallets: [WALLET] });
+  await migrating.load();
+  migrationPrices.delete(MINT_A);
+  await migrating.markAll();
+  expect(Boolean(migrating.state.positions[`${WALLET}:${MINT_A}`]) && migrationAlerts.length === 0, "unpriced shadow migration leaves existing paper position open for a later mark");
+  migrationPrices.set(MINT_A, { priceUsd: 2, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await migrating.markAll();
+  const migratedTrade = migrating.ledger.at(-1)!;
+  expect(!migrating.state.positions[`${WALLET}:${MINT_A}`] && Boolean(migrating.state.positions[`${SPAM_WALLET}:${MINT_B}`]), "shadow migration closes only the newly shadowed wallet's paper position");
+  expect(migratedTrade.reason === "shadow migration" && (migratedTrade.pnlUsd ?? 0) > 0 && approx(migrating.capital(), 1000 + migratedTrade.pnlUsd!, 1e-6), "shadow migration records proceeds and reconciles paper capital");
+  expect(migrationAlerts.length === 1 && migrationAlerts[0]!.includes("TRADE CLOSED — SHADOW MIGRATION"), "migrated paper close sends a closed-trade alert");
+  await migrating.onTrades([ev({ signature: "MIGRATE-NEW" })]);
+  await migrating.markAll();
+  expect(migrating.ledger.filter((trade) => trade.reason === "shadow migration").length === 1 && !migrating.state.positions[`${WALLET}:${MINT_A}`], "shadow wallet cannot reopen a paper position or repeat migration");
+  const migrationRestored = new PaperEngine({ ...migrationOpts, shadowWallets: [WALLET] });
+  await migrationRestored.load();
+  await migrationRestored.markAll();
+  expect(migrationRestored.ledger.filter((trade) => trade.reason === "shadow migration").length === 1, "shadow migration remains idempotent after restart");
 
   console.log("── risk gates ──");
 
@@ -965,6 +1013,7 @@ async function main(): Promise<void> {
   await fs.rm(`${dataDir}-tiny`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-manual`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-shadow`, { recursive: true, force: true });
+  await fs.rm(`${dataDir}-migration`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-kill`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-winrate`, { recursive: true, force: true });
   await fs.rm(`${dataDir}-liq`, { recursive: true, force: true });
