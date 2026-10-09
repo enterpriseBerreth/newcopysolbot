@@ -898,9 +898,14 @@ async function main(): Promise<void> {
   wsSpamInstance!.onmessage!({ data: JSON.stringify({ id: 1, result: 700 }) });
   wsSpamInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 700, result: { value: { signature: "SPAMS1", err: null } } } }) });
   wsSpamInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 700, result: { value: { signature: "SPAMS2", err: null } } } }) });
+  wsSpamInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 700, result: { value: { signature: "SPAMS3", err: null } } } }) });
+  wsSpamInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 700, result: { value: { signature: "SPAMS4", err: null } } } }) });
+  wsSpamInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 700, result: { value: { signature: "SPAMS5", err: null } } } }) });
+  wsSpamInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 700, result: { value: { signature: "SPAMS6", err: null } } } }) });
+  wsSpamInstance!.onmessage!({ data: JSON.stringify({ method: "logsNotification", params: { subscription: 700, result: { value: { signature: "SPAMS7", err: null } } } }) });
   await sleep(120);
-  expect(wsFetched.filter((e) => e.signature === "SPAMS1").length === 1, "first spam-wallet notification sampled and fetched");
-  expect(wsFetched.filter((e) => e.signature === "SPAMS2").length === 0 && spamWsWatcher.shadowDroppedNotifications === 1, "second spam-wallet notification within the window is dropped");
+  const spamSampled = wsFetched.filter((e) => e.signature.startsWith("SPAMS"));
+  expect(spamSampled.length === 5 && spamSampled.map((e) => e.signature).join(",") === "SPAMS1,SPAMS2,SPAMS3,SPAMS4,SPAMS5" && spamWsWatcher.shadowDroppedNotifications === 2, "live spam wallet samples up to 5 notifications per window and drops the rest");
   spamWsWatcher.stop();
 
   console.log("── shadow sim ──");

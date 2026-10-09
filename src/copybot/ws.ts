@@ -12,9 +12,10 @@ const MAX_BACKOFF_MS = 30_000;
 /** Shadow wallets are observed via a 1-notification-per-wallet-per-window sample;
  *  their full firehose would starve the RPC budget of the copying wallets. */
 const SHADOW_SAMPLE_MS = 30_000;
-/** Tracked MEV-speed wallets are sampled the same way (shorter window): their
- *  firehose saturates the fetch queue and crowds out every other wallet. */
-const SPAM_SAMPLE_MS = 10_000;
+/** Tracked MEV-speed wallets still copy in real-time but cannot be allowed to
+ *  monopolize the queue. Cap the sample rate so other wallets still get service. */
+const SPAM_SAMPLE_MS = 2_000;
+const MAX_SPAM_NOTIFICATIONS_PER_WINDOW = 5;
 
 export interface WsLike {
   send(data: string): void;
@@ -56,7 +57,7 @@ export class WsTradeWatcher {
   private decoded = 0;
   private subWallets = new Map<number, string>();
   private reqWallets = new Map<number, string>();
-  private lastShadowSample = new Map<string, number>();
+  private spamSampled = new Map<string, number>();
   private shadowSet = new Set<string>();
   private spamSet = new Set<string>();
 
@@ -166,18 +167,22 @@ export class WsTradeWatcher {
         if (msg.method !== "logsNotification") return;
         const value = msg.params?.result?.value;
         if (!value?.signature || value.err) return; // failed tx: nothing to copy
-        // Firehose wallets (shadow + tracked spam-speed): sample one tx per
-        // wallet per window instead of fetching every notification.
+        // Firehose wallets (shadow + tracked spam-speed): shadow wallets sample one
+        // tx per window for pure simulation; live spam wallets are capped at a small
+        // burst per window so they still copy actively without monopolizing the queue.
         const wallet = msg.params?.subscription != null ? this.subWallets.get(msg.params.subscription) : undefined;
         if (wallet && (this.shadowSet.has(wallet) || this.spamSet.has(wallet))) {
           const now = Date.now();
-          const last = this.lastShadowSample.get(wallet) ?? 0;
           const windowMs = this.shadowSet.has(wallet) ? SHADOW_SAMPLE_MS : SPAM_SAMPLE_MS;
-          if (now - last < windowMs) {
+          const windowMax = this.shadowSet.has(wallet) ? 1 : MAX_SPAM_NOTIFICATIONS_PER_WINDOW;
+          const lastWindow = this.spamSampled.get(wallet) ?? 0;
+          const count = now - lastWindow < windowMs ? (this.spamSampled.get(`__count:${wallet}`) ?? 0) : 0;
+          if (now - lastWindow < windowMs && count >= windowMax) {
             this.shadowDropped++;
             return;
           }
-          this.lastShadowSample.set(wallet, now);
+          this.spamSampled.set(wallet, now);
+          this.spamSampled.set(`__count:${wallet}`, count + 1);
         }
         this.enqueue(value.signature);
       } catch (err) {
