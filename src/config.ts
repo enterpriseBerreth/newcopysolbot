@@ -112,8 +112,8 @@ export const config = {
 
   // Tracked firehose ("spam-speed") wallets: their MEV bots emit so many txs
   // that they saturate the fetch queue and crowd out every other wallet. They
-  // are sampled 1-tx-per-window (10s) like shadow wallets. Default covers the
-  // known MEV-speed tracked wallets (ACTb included: 94% fail rate, firehose).
+  // are sampled up to 5 txs per 2-second window. Default covers the known
+  // MEV-speed tracked wallets (ACTb included: 94% fail rate, firehose).
   spamSampleWallets: str(
     "SPAM_SAMPLE_WALLETS",
     "GijFWw4oNyh9ko3FaZforNsi3jk6wDovARpkKahPD4o5,4vw54BmAogeRV3vPKWyFet5yf8DTLcREzdSzx4rw9Ud9,ACTbvbNm5qTLuofNRPxFPMtHAAtdH1CtzhCZatYHy831",
