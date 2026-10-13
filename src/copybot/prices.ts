@@ -21,7 +21,21 @@ interface DexPair {
 
 const cache = new Map<string, { at: number; info: PairInfo | null; ttl: number }>();
 
+/** Last accepted price per mint — the reference for jump-guard checks. */
+const lastGood = new Map<string, { priceUsd: number; at: number }>();
+/** A price this much newer/older than a recently accepted one is treated as suspect. */
+const JUMP_RATIO = 5;
+/** How long a previously accepted price stays a valid reference. */
+const JUMP_WINDOW_MS = 10 * 60_000;
+
 export type PairProvider = (mint: string) => Promise<PairInfo | null>;
+
+/** True when newPrice is implausibly far from oldPrice (>5x or <1/5x). */
+export function isSuspectJump(newPrice: number, oldPrice: number): boolean {
+  if (!(oldPrice > 0) || !(newPrice > 0)) return false;
+  const ratio = newPrice / oldPrice;
+  return ratio > JUMP_RATIO || ratio < 1 / JUMP_RATIO;
+}
 
 export function selectTrustedPair(mint: string, pairs: DexPair[]): DexPair | undefined {
   const validPairs = pairs.filter(
@@ -96,6 +110,28 @@ export async function getPairInfo(mint: string): Promise<PairInfo | null> {
     info = await fetchJupiterPrice(mint);
   }
 
+  // Jump guard: a >5x move vs a recently accepted price is almost always a
+  // manipulated pool or bad data, not the market. Cross-check with Jupiter
+  // (which prices via routed liquidity) and reject the outlier if it disagrees.
+  const prev = lastGood.get(mint);
+  if (info && prev && now - prev.at < JUMP_WINDOW_MS && isSuspectJump(info.priceUsd, prev.priceUsd)) {
+    log.warn(
+      `price jump guard: ${mint.slice(0, 8)}… $${prev.priceUsd.toPrecision(6)} -> $${info.priceUsd.toPrecision(6)}; verifying via Jupiter`,
+    );
+    const jup = await fetchJupiterPrice(mint);
+    if (jup) {
+      const agreesWithNew = isSuspectJump(jup.priceUsd, info.priceUsd) === false;
+      if (!agreesWithNew) {
+        log.warn(`price jump guard: rejected $${info.priceUsd.toPrecision(6)}; using Jupiter $${jup.priceUsd.toPrecision(6)}`);
+        info = jup;
+      }
+    } else {
+      log.warn(`price jump guard: Jupiter unavailable; holding last trusted price $${prev.priceUsd.toPrecision(6)}`);
+      info = { ...info, priceUsd: prev.priceUsd, dexId: "jump-guard" };
+    }
+  }
+  if (info?.priceUsd) lastGood.set(mint, { priceUsd: info.priceUsd, at: now });
+
   cache.set(mint, { at: now, info, ttl });
   return info;
 }
@@ -108,4 +144,5 @@ export async function getSolPriceUsd(): Promise<number> {
 /** Clear the cache (used by tests). */
 export function clearPriceCache(): void {
   cache.clear();
+  lastGood.clear();
 }

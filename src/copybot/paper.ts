@@ -4,7 +4,7 @@ import path from "node:path";
 import { createLogger } from "../logger.js";
 import { PROCESSED_SIG_RING_SIZE } from "./constants.js";
 import type { PairProvider } from "./prices.js";
-import { getPairInfo, getSolPriceUsd } from "./prices.js";
+import { getPairInfo, getSolPriceUsd, isSuspectJump } from "./prices.js";
 import { short } from "./watcher.js";
 import type { NotifierLike } from "./notifier.js";
 import type { PairInfo, PaperState, PaperTrade, Position, TradeEvent, WalletRankRow } from "./types.js";
@@ -418,6 +418,10 @@ export class PaperEngine {
     const theirBag = ev.tokenDelta + ev.remainingTokens;
     const frac = theirBag > 0 ? Math.min(1, ev.tokenDelta / theirBag) : 1;
 
+    // Exit-price guard: never mirror a sell at a manipulated/bad price; the
+    // position exits later at a sane mark (copy exits, stop-loss, manual close).
+    if (this.suspectExitPrice(pos, price)) return;
+
     const fillPrice = price * (1 - this.opts.exitSlippagePct / 100);
     const sellQty = pos.qty * frac;
     const proceeds = sellQty * fillPrice;
@@ -477,6 +481,11 @@ export class PaperEngine {
         if (!info?.priceUsd) {
           skipped++;
           log.warn(`manual close: no price for ${pos.symbol} (${pos.mint}); position remains open`);
+          continue;
+        }
+        if (this.suspectExitPrice(pos, info.priceUsd)) {
+          skipped++;
+          log.warn(`manual close: suspect price for ${pos.symbol} (${pos.mint}); position remains open — retry with a new operation id once the price is sane`);
           continue;
         }
         await this.forceClose(pos, "manual close", info.priceUsd);
@@ -557,6 +566,36 @@ export class PaperEngine {
 
   // ── stop-loss marking ────────────────────────────────────────
 
+  /** Number of consecutive suspect marks after which a price is accepted
+   *  (protects against manipulated pools without blocking real 100x pumps). */
+  private static readonly SUSPECT_MARKS_TO_ACCEPT = 3;
+
+  /** Exit-price guard: a >5x one-step move vs the last accepted mark (or
+   *  entry) is treated as manipulated data. Returns true while the move is
+   *  unconfirmed; the position's exit is deferred until the price repeats. */
+  private suspectExitPrice(pos: Position, priceUsd: number): boolean {
+    const refPrice = pos.lastMarkUsd ?? pos.costUsd / pos.qty;
+    if (!isSuspectJump(priceUsd, refPrice)) {
+      pos.suspectMarks = 0;
+      pos.lastMarkUsd = priceUsd;
+      return false;
+    }
+    const seen = (pos.suspectMarks ?? 0) + 1;
+    if (seen >= PaperEngine.SUSPECT_MARKS_TO_ACCEPT) {
+      log.warn(
+        `suspect price accepted after ${seen} repeats: ${pos.symbol} $${refPrice.toPrecision(6)} -> $${priceUsd.toPrecision(6)}`,
+      );
+      pos.suspectMarks = 0;
+      pos.lastMarkUsd = priceUsd;
+      return false;
+    }
+    pos.suspectMarks = seen;
+    log.warn(
+      `suspect price move for ${pos.symbol} (${short(pos.wallet)}): $${refPrice.toPrecision(6)} -> $${priceUsd.toPrecision(6)}; exit deferred (${seen}/${PaperEngine.SUSPECT_MARKS_TO_ACCEPT})`,
+    );
+    return true;
+  }
+
   /** Re-mark every open position; force-close anything past the stop loss. */
   async markAll(): Promise<void> {
     const next = this.processing.then(() => this.markPositions());
@@ -569,6 +608,7 @@ export class PaperEngine {
     for (const pos of Object.values(this.state.positions)) {
       const info = await this.pair(pos.mint);
       if (!info?.priceUsd) continue;
+      if (this.suspectExitPrice(pos, info.priceUsd)) continue; // manipulated/bad price: defer every exit, incl. migration
       if (this.shadow.has(pos.wallet)) {
         closes.push({ pos, priceUsd: info.priceUsd, reason: "shadow migration" });
         continue;

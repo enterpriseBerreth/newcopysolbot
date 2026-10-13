@@ -10,7 +10,7 @@ import { DEFAULT_WALLETS, LAMPORTS_PER_SOL } from "./copybot/constants.js";
 import { config } from "./config.js";
 import { classifySignatures, type SignatureRow } from "./copybot/botwatch.js";
 import { extractTrades } from "./copybot/decoder.js";
-import { selectTrustedPair } from "./copybot/prices.js";
+import { selectTrustedPair, isSuspectJump } from "./copybot/prices.js";
 import { PaperEngine, splitShadowEvents } from "./copybot/paper.js";
 import { TelegramNotifier, splitTelegramMessage } from "./copybot/notifier.js";
 import type { NotifierLike } from "./copybot/notifier.js";
@@ -622,6 +622,61 @@ async function main(): Promise<void> {
   await restoreAgain.load();
   expect(approx(restoreAgain.state.cashUsd, cashAfterBuy), "second boot with the same stamp keeps the restored state");
 
+  console.log("── price guards ──");
+
+  expect(isSuspectJump(10, 1) && isSuspectJump(1, 10), "5x jumps in either direction are suspect");
+  expect(!isSuspectJump(4, 1) && !isSuspectJump(0, 1) && !isSuspectJump(1, 0), "small moves and zero prices are not suspect");
+
+  const guardDir = `${dataDir}-guard`;
+  const guardPrices = new Map<string, PairInfo>(prices);
+  const guard = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    takeProfitPct: 50,
+    dataDir: guardDir,
+    pairProvider: async (mint: string) => guardPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await guard.load();
+  await guard.onTrades([ev({ signature: "GUARD-BUY" })]);
+  const guardPos = guard.state.positions[`${WALLET}:${MINT_A}`]!;
+  expect(approx(guardPos.costUsd / guardPos.qty, 1.01, 1e-9), "guard test entry priced at 1.01");
+  guardPrices.set(MINT_A, { priceUsd: 100, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await guard.onTrades([ev({ signature: "GUARD-SELL1", side: "sell", tokenDelta: 50, remainingTokens: 50 })]);
+  expect(Boolean(guard.state.positions[`${WALLET}:${MINT_A}`]) && approx(guard.state.positions[`${WALLET}:${MINT_A}`]!.qty, guardPos.qty, 1e-9), "copy sell at a 100x suspect price is deferred, position untouched");
+  await guard.markAll();
+  expect(Boolean(guard.state.positions[`${WALLET}:${MINT_A}`]) && guard.ledger.every((t) => t.reason !== "take-profit"), "first mark after the deferred sell still defers (2/3 strikes)");
+  await guard.markAll();
+  const guardClose = guard.ledger.at(-1)!;
+  expect(!guard.state.positions[`${WALLET}:${MINT_A}`] && guardClose.reason === "take-profit" && (guardClose.pnlUsd ?? 0) > 0, "third repeated suspect price is accepted and the take-profit close executes");
+  const guardPnlCheck = approx(guardClose.pnlUsd ?? 0, guardPos.qty * 100 * 0.99 - guardPos.costUsd, 1e-6);
+  expect(guardPnlCheck, "accepted close books proceeds at the confirmed price minus exit slippage");
+
+  const manualGuardDir = `${dataDir}-guard-manual`;
+  const manualGuardPrices = new Map<string, PairInfo>(prices);
+  const manualGuard = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: manualGuardDir,
+    pairProvider: async (mint: string) => manualGuardPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await manualGuard.load();
+  await manualGuard.onTrades([ev({ signature: "MG-BUY" })]);
+  manualGuardPrices.set(MINT_A, { priceUsd: 60, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  const mgResult = await manualGuard.closeAll("mg-1");
+  expect(mgResult.skipped === 1 && mgResult.closed === 0 && Boolean(manualGuard.state.positions[`${WALLET}:${MINT_A}`]), "manual close defers a suspect-price position and reports it as skipped");
+
   console.log("── risk gates ──");
 
   const MINT_C = "TokenCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
@@ -659,7 +714,7 @@ async function main(): Promise<void> {
   const killBuys = killEngine.ledger.filter((t) => t.side === "buy").length;
   await killEngine.onTrades([ev({ signature: "K-BLOCKED", mint: MINT_B })]);
   expect(killEngine.ledger.filter((t) => t.side === "buy").length === killBuys && approx(killEngine.state.cashUsd, killCash), "killed wallet cannot open new positions");
-  gatePrices.set(MINT_A, { priceUsd: 10, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  gatePrices.set(MINT_A, { priceUsd: 4, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
   await killEngine.onTrades([ev({ signature: "K-AS1", side: "sell", tokenDelta: 100, remainingTokens: 0 })]);
   expect(!killEngine.isKilled(WALLET), "wallet auto-re-enables after realized PnL recovers");
   await killEngine.onTrades([ev({ signature: "K-REENTRY", mint: MINT_B })]);

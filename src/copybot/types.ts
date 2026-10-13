@@ -27,6 +27,10 @@ export interface Position {
   clipUsd: number;
   /** Highest observed mark price, used for trailing-stop calculations. */
   highestPriceUsd?: number;
+  /** Last accepted mark price — reference for suspect-move guards on exits. */
+  lastMarkUsd?: number;
+  /** Consecutive suspect marks seen (a price is accepted after 3). */
+  suspectMarks?: number;
 }
 
 export interface PaperTrade {
