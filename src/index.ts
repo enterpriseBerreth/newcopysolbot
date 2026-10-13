@@ -46,6 +46,7 @@ async function main(): Promise<void> {
     dynamicClipMaxMultiplier: config.dynamicClipMaxMultiplier,
     dynamicClipMinMultiplier: config.dynamicClipMinMultiplier,
     resetId: config.resetId,
+    restoreFromArchiveStamp: config.restoreFromArchiveStamp || undefined,
     notifier,
   });
 
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
     dynamicClipMaxMultiplier: config.dynamicClipMaxMultiplier,
     dynamicClipMinMultiplier: config.dynamicClipMinMultiplier,
     resetId: config.resetId,
+    restoreFromArchiveStamp: config.restoreFromArchiveStamp || undefined,
     killSwitchPnlUsd: 0,
     killSwitchMinSells: 0,
   });

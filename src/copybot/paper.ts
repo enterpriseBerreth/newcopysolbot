@@ -56,6 +56,10 @@ export interface EngineOpts {
    *  reset, previous state + ledger are archived and a fresh account starts
    *  from startingBudgetUsd. Empty disables. */
   resetId?: string;
+  /** One-time boot restore: move .archive-<stamp> state/ledger back into place
+   *  before loading. The archive files are consumed by the rename, so leaving
+   *  the env var set is harmless on subsequent boots. */
+  restoreFromArchiveStamp?: string;
   pairProvider?: PairProvider;
   solPriceProvider?: () => Promise<number>;
   notifier?: NotifierLike;
@@ -119,6 +123,32 @@ export class PaperEngine {
   /** Capital reset: when a new RESET_ID is provided, archive the previous
    *  snapshot + ledger and start a fresh account at startingBudgetUsd. */
   private async maybeReset(): Promise<void> {
+    const stamp = this.opts.restoreFromArchiveStamp;
+    if (stamp) {
+      let restoredArchive = false;
+      for (const file of [this.snapshotFile, this.ledgerFile]) {
+        try {
+          await fs.rename(`${file}.archive-${stamp}`, file);
+          restoredArchive = true;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+        }
+      }
+      if (restoredArchive) {
+        if (this.opts.resetId) {
+          // Force the reset marker so the restored state is not immediately re-archived.
+          try {
+            const raw = await fs.readFile(this.snapshotFile, "utf8");
+            const snap = JSON.parse(raw) as Partial<PaperState>;
+            snap.lastResetId = this.opts.resetId;
+            await fs.writeFile(this.snapshotFile, JSON.stringify(snap));
+          } catch {
+            /* no snapshot: nothing to patch */
+          }
+        }
+        log.warn(`RESTORE from .archive-${stamp}: archived state moved back into place`);
+      }
+    }
     const resetId = this.opts.resetId;
     if (!resetId) return;
     let lastResetId: string | undefined;
@@ -129,10 +159,10 @@ export class PaperEngine {
       /* no snapshot yet: nothing to archive */
     }
     if (lastResetId === resetId) return;
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const archiveStamp = new Date().toISOString().replace(/[:.]/g, "-");
     for (const file of [this.snapshotFile, this.ledgerFile]) {
       try {
-        await fs.rename(file, `${file}.archive-${stamp}`);
+        await fs.rename(file, `${file}.archive-${archiveStamp}`);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }

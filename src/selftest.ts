@@ -589,6 +589,39 @@ async function main(): Promise<void> {
   await migrationRestored.markAll();
   expect(migrationRestored.ledger.filter((trade) => trade.reason === "shadow migration").length === 1, "shadow migration remains idempotent after restart");
 
+  const restoreDir = `${dataDir}-restore`;
+  const restoreOpts = {
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    dataDir: restoreDir,
+    pairProvider: async (mint: string) => prices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  };
+  const preReset = new PaperEngine(restoreOpts);
+  await preReset.load();
+  await preReset.onTrades([ev({ signature: "RESTORE-BUY" })]);
+  const cashAfterBuy = preReset.state.cashUsd;
+  const postReset = new PaperEngine({ ...restoreOpts, resetId: "restore-r1" });
+  await postReset.load();
+  expect(approx(postReset.state.cashUsd, 1000) && !postReset.state.positions[`${WALLET}:${MINT_A}`], "reset archives the traded account and starts fresh");
+  const snapArchive = (await fs.readdir(restoreDir)).find((f: string) => f.startsWith("positions-snapshot.json.archive-"));
+  expect(Boolean(snapArchive), "reset produced a snapshot archive");
+  const stamp = snapArchive!.slice("positions-snapshot.json.archive-".length);
+  const restoredEngine = new PaperEngine({ ...restoreOpts, resetId: "restore-r1", restoreFromArchiveStamp: stamp });
+  await restoredEngine.load();
+  expect(approx(restoredEngine.state.cashUsd, cashAfterBuy) && Boolean(restoredEngine.state.positions[`${WALLET}:${MINT_A}`]), "boot restore moves the archived state back into place");
+  expect(restoredEngine.state.lastResetId === "restore-r1", "restored state carries the reset marker to avoid re-archiving");
+  expect(restoredEngine.ledger.some((t) => t.signature === "RESTORE-BUY"), "restored ledger includes archived trades");
+  expect(!(await fs.readdir(restoreDir)).some((f: string) => f.includes(`.archive-${stamp}`)), "restore consumes the archive files so re-boots are no-ops");
+  const restoreAgain = new PaperEngine({ ...restoreOpts, resetId: "restore-r1", restoreFromArchiveStamp: stamp });
+  await restoreAgain.load();
+  expect(approx(restoreAgain.state.cashUsd, cashAfterBuy), "second boot with the same stamp keeps the restored state");
+
   console.log("── risk gates ──");
 
   const MINT_C = "TokenCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";

@@ -78,6 +78,9 @@ export const config = {
   // Use only the last N sells for kill-switch math so a wallet can recover
   // after a profitable streak. 0 = use entire history (old behavior).
   killSwitchLookbackSells: num("KILL_SWITCH_LOOKBACK_SELLS", 20),
+  // One-time boot restore: rename .archive-<stamp> state/ledger back into
+  // place before loading (consumed by the rename; safe to leave set).
+  restoreFromArchiveStamp: str("RESTORE_FROM_ARCHIVE_STAMP", ""),
   // Max accumulated cost per position, as a multiple of the first clip
   // (blocks wallets from DCA-ing many times into one token). 0 disables.
   topUpCostCapMultiple: num("TOP_UP_COST_CAP_MULTIPLE", 2),
