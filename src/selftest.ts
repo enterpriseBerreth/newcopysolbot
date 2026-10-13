@@ -10,6 +10,7 @@ import { DEFAULT_WALLETS, LAMPORTS_PER_SOL } from "./copybot/constants.js";
 import { config } from "./config.js";
 import { classifySignatures, type SignatureRow } from "./copybot/botwatch.js";
 import { extractTrades } from "./copybot/decoder.js";
+import { selectTrustedPair } from "./copybot/prices.js";
 import { PaperEngine, splitShadowEvents } from "./copybot/paper.js";
 import { TelegramNotifier, splitTelegramMessage } from "./copybot/notifier.js";
 import type { NotifierLike } from "./copybot/notifier.js";
@@ -95,7 +96,7 @@ async function main(): Promise<void> {
   ];
   const roster = DEFAULT_WALLETS.split(",");
   expect(roster.length === 23 && new Set(roster).size === 23, "wallet roster contains 23 unique addresses");
-  expect(newWallets.every((wallet) => roster.includes(wallet) && !config.premiumWallets.includes(wallet)) && newWallets.filter((wallet) => config.shadowWallets.includes(wallet)).join() === "Fpf2DJPM3n7LB9RWKaZ2zQ3KRcVWACHXpjngBNS99Q2H", "all seven added wallets remain tracked; Fpf2 alone moved from live 1% to shadow");
+  expect(newWallets.every((wallet) => roster.includes(wallet) && config.shadowWallets.includes(wallet) && !config.premiumWallets.includes(wallet)), "all seven added wallets remain tracked in shadow mode at standard 1% clip configuration");
   expect(config.clipPct === 1, "standard clip remains 1% for new wallets");
   const movedToShadow = [
     "9LXWa7V3AE15VfBupcx5gDts2ix3Y9NzbcKZKjkkq6hV",
@@ -105,7 +106,28 @@ async function main(): Promise<void> {
     "GijFWw4oNyh9ko3FaZforNsi3jk6wDovARpkKahPD4o5",
   ];
   expect(movedToShadow.every((wallet) => roster.includes(wallet) && config.shadowWallets.includes(wallet) && !config.premiumWallets.includes(wallet)), "five requested wallets stay tracked but are shadow-only, not premium");
-  expect(config.shadowWallets.length === 10 && new Set(config.shadowWallets).size === 10, "all original and newly shadowed wallets are present exactly once");
+  const liveWallets = [
+    "29yFzeBZgxf5zqrAkKXwgZtQehRf4pL8WbV2nRJikbw8",
+    "CHCLtC1AWpSshZkiU8TNoNn9r7CHecVhTakuao7u4aBX",
+  ];
+  expect(config.shadowWallets.length === 21 && new Set(config.shadowWallets).size === 21 && liveWallets.every((wallet) => roster.includes(wallet) && !config.shadowWallets.includes(wallet)) && config.shadowWallets.every((wallet) => roster.includes(wallet)), "wallets ranked 3–23 are shadowed exactly once; only the top two remain live");
+
+  const priceMint = "PriceTestMint111111111111111111111111111111111";
+  const trustedPair = (priceUsd: string, liquidityUsd: number) => ({
+    chainId: "solana",
+    dexId: "test",
+    url: "",
+    baseToken: { address: priceMint, symbol: "TEST" },
+    quoteToken: { address: MINT_A, symbol: "AAAA" },
+    priceUsd,
+    liquidity: { usd: liquidityUsd },
+  });
+  const selectedPair = selectTrustedPair(priceMint, [
+    trustedPair("0.0000032", 300_000),
+    trustedPair("0.00000315", 200_000),
+    trustedPair("0.016", 500_000),
+  ]);
+  expect(selectedPair?.priceUsd === "0.0000032", "liquidity-leading extreme outlier cannot set the token mark");
 
   console.log("── decoder ──");
 

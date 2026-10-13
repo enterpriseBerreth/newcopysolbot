@@ -1,3 +1,4 @@
+import { WebSocket } from "ws";
 import { createLogger } from "../logger.js";
 import { extractTrades } from "./decoder.js";
 import { short } from "./watcher.js";
@@ -29,8 +30,7 @@ export interface WsLike {
 export type WsFactory = (url: string) => WsLike;
 
 function defaultWsFactory(url: string): WsLike {
-  const Ctor = (globalThis as unknown as { WebSocket: new (url: string) => WsLike }).WebSocket;
-  return new Ctor(url);
+  return new WebSocket(url) as unknown as WsLike;
 }
 
 /**

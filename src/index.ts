@@ -1,7 +1,7 @@
 import "dotenv/config";
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { config } from "./config.js";
+import { config, minWalletTradeUsdByWallet } from "./config.js";
 import { createLogger } from "./logger.js";
 import { runBotCheck, type BotRegistry } from "./copybot/botwatch.js";
 import { PaperEngine, splitShadowEvents } from "./copybot/paper.js";
@@ -15,7 +15,7 @@ import type { Position, TradeEvent } from "./copybot/types.js";
 const log = createLogger("index");
 
 async function main(): Promise<void> {
-  log.info(`COPY-SOL booting | rpc=${new URL(config.rpcUrl).host} | wallets=${config.trackedWallets.length} | clip=${config.clipPct}% | minWalletTrade=$${config.minWalletTradeUsd} | SL=-${config.stopLossPct}%`);
+  log.info(`COPY-SOL booting | rpc=${new URL(config.rpcUrl).host} | wallets=${config.trackedWallets.length} | clip=${config.clipPct}% | liveMin=$${config.liveMinWalletTradeUsd} | SL=-${config.stopLossPct}% | TP=+${config.takeProfitPct}% | TS=-${config.trailingStopPct}%`);
 
   const notifier = new TelegramNotifier(config.telegramBotToken, config.telegramChatId);
   const engine = new PaperEngine({
@@ -25,10 +25,13 @@ async function main(): Promise<void> {
     premiumClipPct: config.premiumClipPct,
     premiumFallbackClipPct: config.premiumFallbackClipPct,
     minWalletTradeUsd: config.minWalletTradeUsd,
+    minWalletTradeUsdByWallet,
     maxPositions: config.maxPositions,
     entrySlippagePct: config.entrySlippagePct,
     exitSlippagePct: config.exitSlippagePct,
     stopLossPct: config.stopLossPct,
+    trailingStopPct: config.trailingStopPct,
+    takeProfitPct: config.takeProfitPct,
     dataDir: config.dataDir,
     trackedWallets: config.trackedWallets,
     shadowWallets: config.shadowWallets,
@@ -36,8 +39,12 @@ async function main(): Promise<void> {
     killSwitchPnlUsd: config.killSwitchPnlUsd,
     killSwitchMinSells: config.killSwitchMinSells,
     killSwitchMaxWinRate: config.killSwitchMaxWinRate,
+    killSwitchLookbackSells: config.killSwitchLookbackSells,
     topUpCostCapMultiple: config.topUpCostCapMultiple,
     maxExposurePct: config.maxExposurePct,
+    dynamicClipLookbackSells: config.dynamicClipLookbackSells,
+    dynamicClipMaxMultiplier: config.dynamicClipMaxMultiplier,
+    dynamicClipMinMultiplier: config.dynamicClipMinMultiplier,
     resetId: config.resetId,
     notifier,
   });
@@ -50,15 +57,21 @@ async function main(): Promise<void> {
     startingBudgetUsd: config.shadowSimBudgetUsd,
     clipPct: config.clipPct,
     minWalletTradeUsd: config.minWalletTradeUsd,
+    minWalletTradeUsdByWallet,
     maxPositions: config.maxPositions,
     entrySlippagePct: config.entrySlippagePct,
     exitSlippagePct: config.exitSlippagePct,
     stopLossPct: config.stopLossPct,
+    trailingStopPct: config.trailingStopPct,
+    takeProfitPct: config.takeProfitPct,
     dataDir: path.join(config.dataDir, "shadow-sim"),
     trackedWallets: config.shadowWallets,
     liquidityFloorUsd: config.liquidityFloorUsd,
     topUpCostCapMultiple: config.topUpCostCapMultiple,
     maxExposurePct: config.maxExposurePct,
+    dynamicClipLookbackSells: config.dynamicClipLookbackSells,
+    dynamicClipMaxMultiplier: config.dynamicClipMaxMultiplier,
+    dynamicClipMinMultiplier: config.dynamicClipMinMultiplier,
     resetId: config.resetId,
     killSwitchPnlUsd: 0,
     killSwitchMinSells: 0,
@@ -139,7 +152,10 @@ async function main(): Promise<void> {
       premiumClipPct: config.premiumClipPct,
       premiumFallbackClipPct: config.premiumFallbackClipPct,
       minWalletTradeUsd: config.minWalletTradeUsd,
+      liveMinWalletTradeUsd: config.liveMinWalletTradeUsd,
       stopLossPct: config.stopLossPct,
+      trailingStopPct: config.trailingStopPct,
+      takeProfitPct: config.takeProfitPct,
       markIntervalMs: config.markIntervalMs,
       maxExposurePct: config.maxExposurePct,
     }),

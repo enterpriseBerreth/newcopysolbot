@@ -4,6 +4,8 @@ import type { PairInfo } from "./types.js";
 
 const log = createLogger("prices");
 
+const JUPITER_PRICE_API_URL = process.env["JUPITER_PRICE_API_URL"] ?? "https://api.jup.ag/price/v2";
+
 const TTL_TOKEN_MS = 30_000;
 const TTL_SOL_MS = 60_000;
 
@@ -21,6 +23,45 @@ const cache = new Map<string, { at: number; info: PairInfo | null; ttl: number }
 
 export type PairProvider = (mint: string) => Promise<PairInfo | null>;
 
+export function selectTrustedPair(mint: string, pairs: DexPair[]): DexPair | undefined {
+  const validPairs = pairs.filter(
+    (pair) => pair.chainId === "solana" && pair.baseToken?.address === mint && Number(pair.priceUsd) > 0,
+  );
+  const sortedPrices = validPairs.map((pair) => Number(pair.priceUsd)).sort((a, b) => a - b);
+  const medianPrice = sortedPrices[Math.floor(sortedPrices.length / 2)];
+  if (!medianPrice || !Number.isFinite(medianPrice)) return undefined;
+  const trustedPairs = validPairs.filter((pair) => {
+    const ratio = Number(pair.priceUsd) / medianPrice;
+    return Number.isFinite(ratio) && ratio >= 0.2 && ratio <= 5;
+  });
+  trustedPairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
+  return trustedPairs[0];
+}
+
+async function fetchJupiterPrice(mint: string): Promise<PairInfo | null> {
+  try {
+    const res = await fetch(`${JUPITER_PRICE_API_URL}?ids=${mint}`, { signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) {
+      log.warn(`jupiter ${mint.slice(0, 8)}… -> HTTP ${res.status}`);
+      return null;
+    }
+    const json = (await res.json()) as { data?: Record<string, { price?: string }> };
+    const entry = json.data?.[mint];
+    const price = entry?.price ? Number(entry.price) : 0;
+    if (!price || !Number.isFinite(price)) return null;
+    return {
+      priceUsd: price,
+      liquidityUsd: 0,
+      symbol: mint.slice(0, 6),
+      dexId: "jupiter",
+      pairUrl: "",
+    };
+  } catch (err) {
+    log.warn(`jupiter ${mint.slice(0, 8)}… failed: ${String(err)}`);
+    return null;
+  }
+}
+
 export async function getPairInfo(mint: string): Promise<PairInfo | null> {
   const now = Date.now();
   const ttl = mint === SOL_MINT ? TTL_SOL_MS : TTL_TOKEN_MS;
@@ -34,11 +75,7 @@ export async function getPairInfo(mint: string): Promise<PairInfo | null> {
     });
     if (res.ok) {
       const json = (await res.json()) as { pairs?: DexPair[] | null };
-      const pairs = (json.pairs ?? []).filter(
-        (p) => p.chainId === "solana" && p.baseToken?.address === mint && Number(p.priceUsd) > 0,
-      );
-      pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
-      const best = pairs[0];
+      const best = selectTrustedPair(mint, json.pairs ?? []);
       if (best) {
         info = {
           priceUsd: Number(best.priceUsd),
@@ -53,6 +90,10 @@ export async function getPairInfo(mint: string): Promise<PairInfo | null> {
     }
   } catch (err) {
     log.warn(`dexscreener ${mint.slice(0, 8)}… failed: ${String(err)}`);
+  }
+
+  if (!info) {
+    info = await fetchJupiterPrice(mint);
   }
 
   cache.set(mint, { at: now, info, ttl });

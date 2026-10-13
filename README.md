@@ -7,7 +7,7 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 1. **Wallet watching** — subscribes to each wallet over Solana WebSocket when configured; HTTP polling runs when subscriptions are unavailable. Every notification still needs an HTTP transaction fetch, so RPC quotas and backlog can cause missed trades.
 2. **Trade detection** — balance-diff decoding for known DEX programs (Raydium, Pump.fun, Jupiter, Meteora, Orca, etc.). Plain transfers without a known DEX program are ignored.
 3. **Copy sizing** — two premium wallets (29yF, CHCL) use a 10% clip of their trade notional when cash, top-up and exposure limits permit, otherwise a 5% clip if it fits; other live wallets use 1%. Buys below $200 copied-wallet notional are skipped. Exposure per copied wallet and per token is capped at 15% of paper capital.
-4. **Shadow mode** — ten tracked wallets (EeXv, AimU, ardi, DkjB, 3bza, 9LXW, 9BMz, 4b3Z, Fpf2, GijF) are monitored and simulated separately without new live paper buys. Previously opened live paper positions are closed at the next available mark, realized into cash, and reported as closed trades.
+4. **Shadow mode** — 21 tracked wallets (all except 29yF and CHCL) are monitored and simulated separately without new live paper buys. Previously opened live paper positions are closed at the next available mark, realized into cash, and reported as closed trades.
 5. **Exits mirrored** — when a wallet sells X% of its bag, we sell X% of our position; profits refill paper cash.
 6. **Paper fills** — the copied wallet's SOL leg estimates its trade notional for clip sizing. Our paper entry/exit uses the available market price at detection, not the wallet's earlier execution price, plus entry/exit slippage.
 7. **Stop loss** — open positions are re-marked every 30s and force-closed when down 40%. Rapid price gaps can exceed this threshold.
@@ -24,11 +24,16 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 | `TRACKED_WALLETS` | starter list | Comma-separated wallets to copy |
 | `CLIP_PCT` | `1` | Standard entry as % of copied wallet's trade notional |
 | `PREMIUM_CLIP_WALLETS` | 29yF, CHCL | Live wallets eligible for 10% then 5% fallback clips |
-| `SHADOW_WALLETS` | 10 listed above | Tracked wallets simulated separately; existing live paper positions close at next available mark |
+| `SHADOW_WALLETS` | All tracked except 29yF, CHCL | Tracked wallets simulated separately; existing live paper positions close at next available mark |
 | `MAX_EXPOSURE_PCT` | `15` | Max cost basis per wallet and per token as % of paper capital; 0 disables |
 | `MIN_WALLET_TRADE_USD` | `200` | Skip copied-wallet buys below this notional |
+| `LIVE_MIN_WALLET_TRADE_USD` | `50` | Lower floor for live (non-shadow) wallets |
 | `STARTING_BUDGET_USD` | `1000` (production) | Paper budget; persisted accounts retain their current balance |
 | `STOP_LOSS_PCT` | `40` | Force-close positions down this much |
+| `TRAILING_STOP_PCT` | `15` | Force-close after pullback from peak; 0 disables |
+| `TAKE_PROFIT_PCT` | `50` | Force-close once up this much; 0 disables |
+| `KILL_SWITCH_LOOKBACK_SELLS` | `20` | Kill-switch math over last N sells (recovery); 0 = full history |
+| `DYNAMIC_CLIP_LOOKBACK_SELLS` | `20` | Scale clips 0.6x–1.5x by recent performance; 0 disables |
 | `MAX_POSITIONS` | `1000` | Safety valve — concurrency is budget-bound |
 | `ENTRY_SLIPPAGE_PCT` / `EXIT_SLIPPAGE_PCT` | `1` | Fill realism |
 | `MARK_INTERVAL_MS` | `30000` | Stop-loss marking cadence |

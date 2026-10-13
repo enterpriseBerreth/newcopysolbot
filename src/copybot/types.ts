@@ -25,6 +25,8 @@ export interface Position {
   costUsd: number;
   openedAt: number;
   clipUsd: number;
+  /** Highest observed mark price, used for trailing-stop calculations. */
+  highestPriceUsd?: number;
 }
 
 export interface PaperTrade {

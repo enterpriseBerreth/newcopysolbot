@@ -18,10 +18,16 @@ export interface EngineOpts {
   premiumClipPct?: number;
   premiumFallbackClipPct?: number;
   minWalletTradeUsd: number;
+  /** Per-wallet override of the minimum copied-trade notional. */
+  minWalletTradeUsdByWallet?: Record<string, number>;
   maxPositions: number;
   entrySlippagePct: number;
   exitSlippagePct: number;
   stopLossPct: number;
+  /** Close a position once it has pulled back this many percent from its highest mark (0 disables). */
+  trailingStopPct?: number;
+  /** Close a position once it is up this many percent from entry (0 disables). */
+  takeProfitPct?: number;
   dataDir: string;
   trackedWallets?: string[];
   /** Wallets to observe without deploying capital: trades are decoded and
@@ -35,9 +41,17 @@ export interface EngineOpts {
   killSwitchMinSells?: number;
   /** Win-rate kill fires below this win rate (with negative PnL). */
   killSwitchMaxWinRate?: number;
+  /** If set, the kill switch only looks at the last N closed sells (allows recovery). 0 disables. */
+  killSwitchLookbackSells?: number;
   /** Max accumulated position cost, as a multiple of the first clip. 0 disables. */
   topUpCostCapMultiple?: number;
   maxExposurePct?: number;
+  /** Dynamic clip: if >0, scale this wallet's clip up/down based on the last N closed sells. */
+  dynamicClipLookbackSells?: number;
+  /** Dynamic clip: boost multiplier cap (default 1.5). */
+  dynamicClipMaxMultiplier?: number;
+  /** Dynamic clip: reduce multiplier floor (default 0.5). */
+  dynamicClipMinMultiplier?: number;
   /** Operation id for a capital reset: when it differs from the last applied
    *  reset, previous state + ledger are archived and a fresh account starts
    *  from startingBudgetUsd. Empty disables. */
@@ -70,8 +84,12 @@ export class PaperEngine {
   private killPnl: number;
   private killMinSells: number;
   private killMaxWinRate: number;
+  private killLookback: number;
   private topUpCap: number;
   private maxExposurePct: number;
+  private dynamicLookback: number;
+  private dynamicMaxMult: number;
+  private dynamicMinMult: number;
 
   shadowTradesSkipped = 0;
 
@@ -83,8 +101,12 @@ export class PaperEngine {
     this.killPnl = opts.killSwitchPnlUsd ?? -50;
     this.killMinSells = opts.killSwitchMinSells ?? 20;
     this.killMaxWinRate = opts.killSwitchMaxWinRate ?? 0.3;
+    this.killLookback = opts.killSwitchLookbackSells ?? 0;
     this.topUpCap = opts.topUpCostCapMultiple ?? 2;
     this.maxExposurePct = opts.maxExposurePct ?? 0;
+    this.dynamicLookback = opts.dynamicClipLookbackSells ?? 0;
+    this.dynamicMaxMult = opts.dynamicClipMaxMultiplier ?? 1.5;
+    this.dynamicMinMult = opts.dynamicClipMinMultiplier ?? 0.5;
     this.pair = opts.pairProvider ?? getPairInfo;
     this.solPrice = opts.solPriceProvider ?? getSolPriceUsd;
     this.notifier = opts.notifier ?? { send: async () => {} };
@@ -255,9 +277,10 @@ export class PaperEngine {
       log.warn(`KILL-SWITCH skip buy: ${short(ev.wallet)} ${symbol} (wallet below PnL/win-rate threshold)`);
       return;
     }
-    if (walletNotional < this.opts.minWalletTradeUsd) {
+    const minWalletTradeUsd = this.opts.minWalletTradeUsdByWallet?.[ev.wallet] ?? this.opts.minWalletTradeUsd;
+    if (walletNotional < minWalletTradeUsd) {
       log.info(
-        `skip dust buy: ${short(ev.wallet)} ${symbol} notional $${walletNotional.toFixed(2)} < $${this.opts.minWalletTradeUsd}`,
+        `skip dust buy: ${short(ev.wallet)} ${symbol} notional $${walletNotional.toFixed(2)} < $${minWalletTradeUsd}`,
       );
       return;
     }
@@ -281,7 +304,9 @@ export class PaperEngine {
     const walletCost = positions.filter((pos) => pos.wallet === ev.wallet).reduce((sum, pos) => sum + pos.costUsd, 0);
     const tokenCost = positions.filter((pos) => pos.mint === ev.mint).reduce((sum, pos) => sum + pos.costUsd, 0);
     const exposureLimit = this.maxExposurePct > 0 ? (this.capital() * this.maxExposurePct) / 100 : Infinity;
-    const choices = premium ? [primaryPct, fallbackPct] : [primaryPct];
+    const dynamicMult = this.dynamicClipMultiplier(ev.wallet);
+    const rawChoices = premium ? [primaryPct, fallbackPct] : [primaryPct];
+    const choices = rawChoices.map((pct) => Math.max(0.1, pct * dynamicMult));
     const appliedPct = choices.find((pct) => {
       const amount = (walletNotional * pct) / 100;
       return amount > 0 && this.state.cashUsd >= amount &&
@@ -306,6 +331,7 @@ export class PaperEngine {
     if (existing) {
       existing.qty += qty;
       existing.costUsd += ourUsd;
+      existing.highestPriceUsd = Math.max(existing.highestPriceUsd ?? fillPrice, fillPrice);
       pos = existing;
     } else {
       pos = {
@@ -317,6 +343,7 @@ export class PaperEngine {
         costUsd: ourUsd,
         openedAt: Date.now(),
         clipUsd: ourUsd,
+        highestPriceUsd: fillPrice,
       };
       this.state.positions[key] = pos;
     }
@@ -436,25 +463,57 @@ export class PaperEngine {
 
   // ── risk gates ───────────────────────────────────────────────
 
-  private walletStats(wallet: string): { realizedPnl: number; sells: number; wins: number } {
+  private walletStats(wallet: string, lookback = 0): { realizedPnl: number; sells: number; wins: number } {
     let realizedPnl = 0;
     let sells = 0;
     let wins = 0;
+    const recent: Array<{ pnl: number; won: boolean }> = [];
     for (const t of this.ledger) {
       if (t.wallet !== wallet || t.side !== "sell") continue;
-      sells++;
       const pnl = t.pnlUsd ?? 0;
-      realizedPnl += pnl;
-      if (pnl > 0) wins++;
+      const won = pnl > 0;
+      recent.push({ pnl, won });
+    }
+    const sample = lookback > 0 ? recent.slice(-lookback) : recent;
+    for (const s of sample) {
+      sells++;
+      realizedPnl += s.pnl;
+      if (s.won) wins++;
     }
     return { realizedPnl, sells, wins };
+  }
+
+  /** Scale a wallet's clip based on its recent realized performance.
+   *  Winning streaks increase size; losing streaks shrink it. */
+  private dynamicClipMultiplier(wallet: string): number {
+    if (this.dynamicLookback <= 0) return 1;
+    const recent: number[] = [];
+    for (const t of this.ledger) {
+      if (t.wallet !== wallet || t.side !== "sell") continue;
+      recent.push(t.pnlUsd ?? 0);
+    }
+    const sample = recent.slice(-this.dynamicLookback);
+    if (sample.length < 5) return 1; // not enough data
+    const wins = sample.filter((pnl) => pnl > 0);
+    const losses = sample.filter((pnl) => pnl < 0);
+    const winRate = wins.length / sample.length;
+    const grossProfit = wins.reduce((s, pnl) => s + pnl, 0);
+    const grossLoss = Math.abs(losses.reduce((s, pnl) => s + pnl, 0));
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
+    let mult = 1;
+    if (winRate >= 0.6 && (profitFactor >= 2 || grossProfit > 0 && grossLoss === 0)) {
+      mult = 1.5;
+    } else if (winRate <= 0.35 || (profitFactor < 0.8 && grossLoss > 0)) {
+      mult = 0.6;
+    }
+    return Math.max(this.dynamicMinMult, Math.min(this.dynamicMaxMult, mult));
   }
 
   /** True while a wallet's trailing performance blocks new entries.
    *  Stateless: re-evaluated per buy, so wallets auto-re-enable when their
    *  realized PnL recovers (e.g. open positions exit profitably). */
   isKilled(wallet: string): boolean {
-    const s = this.walletStats(wallet);
+    const s = this.walletStats(wallet, this.killLookback);
     if (this.killPnl !== 0 && s.realizedPnl <= this.killPnl) return true;
     if (this.killMinSells > 0 && s.sells >= this.killMinSells && s.realizedPnl < 0 && s.wins / s.sells < this.killMaxWinRate) {
       return true;
@@ -485,8 +544,20 @@ export class PaperEngine {
         continue;
       }
       const entryPrice = pos.costUsd / pos.qty;
+      pos.highestPriceUsd = Math.max(pos.highestPriceUsd ?? entryPrice, info.priceUsd);
       const pnlPct = ((info.priceUsd - entryPrice) / entryPrice) * 100;
-      if (this.opts.stopLossPct > 0 && pnlPct <= -this.opts.stopLossPct) closes.push({ pos, priceUsd: info.priceUsd, reason: "stop-loss" });
+      const takeProfit = this.opts.takeProfitPct ?? 0;
+      const trailingStop = this.opts.trailingStopPct ?? 0;
+      if (this.opts.stopLossPct > 0 && pnlPct <= -this.opts.stopLossPct) {
+        closes.push({ pos, priceUsd: info.priceUsd, reason: "stop-loss" });
+      } else if (takeProfit > 0 && pnlPct >= takeProfit) {
+        closes.push({ pos, priceUsd: info.priceUsd, reason: "take-profit" });
+      } else if (
+        trailingStop > 0 &&
+        info.priceUsd <= (pos.highestPriceUsd ?? entryPrice) * (1 - trailingStop / 100)
+      ) {
+        closes.push({ pos, priceUsd: info.priceUsd, reason: "trailing-stop" });
+      }
     }
     for (const { pos, priceUsd, reason } of closes) {
       await this.forceClose(pos, reason, priceUsd);
