@@ -86,6 +86,20 @@ export const config = {
   topUpCostCapMultiple: num("TOP_UP_COST_CAP_MULTIPLE", 2),
   maxExposurePct: num("MAX_EXPOSURE_PCT", 15),
 
+  // Skip entries when the current mark is more than this % above the copied
+  // wallet's own implied fill price (we would be chasing their move). 0 disables.
+  chaseGuardPct: num("CHASE_GUARD_PCT", 15),
+  // Pause ALL new entries for the rest of the UTC day once realized day PnL
+  // reaches -(this %) of the starting budget. Exits still mirror. 0 disables.
+  dailyLossCapPct: num("DAILY_LOSS_CAP_PCT", 5),
+  // Time stop: exit a position older than TIME_STOP_HOURS when its PnL is at
+  // or below TIME_STOP_PCT (negative %). 0 hours disables.
+  timeStopHours: num("TIME_STOP_HOURS", 24),
+  timeStopPct: num("TIME_STOP_PCT", -5),
+  // After a realized-loss exit, block re-buying that token (from any wallet)
+  // for this many hours. 0 disables.
+  tokenReentryBlockHours: num("TOKEN_REENTRY_BLOCK_HOURS", 6),
+
   // Dynamic clip sizing: scale a wallet's clip up/down based on its last N sells.
   // 0 disables (static 1% / 10%).
   dynamicClipLookbackSells: num("DYNAMIC_CLIP_LOOKBACK_SELLS", 20),

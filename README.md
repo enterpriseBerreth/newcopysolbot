@@ -33,6 +33,11 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 | `TRAILING_STOP_PCT` | `15` | Force-close after pullback from peak; 0 disables |
 | `TAKE_PROFIT_PCT` | `50` | Force-close once up this much; 0 disables |
 | `KILL_SWITCH_LOOKBACK_SELLS` | `20` | Kill-switch math over last N sells (recovery); 0 = full history |
+| `CHASE_GUARD_PCT` | `15` | Skip entries whose mark is >this % above the wallet's own fill price (chasing); 0 disables |
+| `DAILY_LOSS_CAP_PCT` | `5` | Pause new entries for the UTC day once realized day PnL hits -(this %) of budget; 0 disables |
+| `TIME_STOP_HOURS` | `24` | Exit positions older than this when below `TIME_STOP_PCT`; 0 disables |
+| `TIME_STOP_PCT` | `-5` | Time-stop PnL threshold (%); 0 disables |
+| `TOKEN_REENTRY_BLOCK_HOURS` | `6` | After a realized-loss exit, block re-buying that token (any wallet) for this long; 0 disables |
 | `DYNAMIC_CLIP_LOOKBACK_SELLS` | `20` | Scale clips 0.6x–1.5x by recent performance; 0 disables |
 | `MAX_POSITIONS` | `1000` | Safety valve — concurrency is budget-bound |
 | `ENTRY_SLIPPAGE_PCT` / `EXIT_SLIPPAGE_PCT` | `1` | Fill realism |

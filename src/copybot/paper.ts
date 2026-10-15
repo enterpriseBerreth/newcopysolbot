@@ -46,6 +46,20 @@ export interface EngineOpts {
   /** Max accumulated position cost, as a multiple of the first clip. 0 disables. */
   topUpCostCapMultiple?: number;
   maxExposurePct?: number;
+  /** Skip entries when the current mark is more than this % above the copied
+   *  wallet's own implied fill price (chasing their move). 0 disables. */
+  chaseGuardPct?: number;
+  /** Pause all new entries for the rest of the UTC day once realized day PnL
+   *  reaches -(this %) of the starting budget. 0 disables. */
+  dailyLossCapPct?: number;
+  /** Time stop: exit a position older than this many hours when its PnL is
+   *  at or below timeStopPct. 0 disables. */
+  timeStopHours?: number;
+  /** Time-stop PnL threshold in % (negative). 0 disables the time stop. */
+  timeStopPct?: number;
+  /** After a realized-loss exit, block re-buying that token (any wallet) for
+   *  this many hours. 0 disables. */
+  tokenReentryBlockHours?: number;
   /** Dynamic clip: if >0, scale this wallet's clip up/down based on the last N closed sells. */
   dynamicClipLookbackSells?: number;
   /** Dynamic clip: boost multiplier cap (default 1.5). */
@@ -66,7 +80,7 @@ export interface EngineOpts {
 }
 
 function defaultState(startingBudgetUsd: number): PaperState {
-  return { cashUsd: startingBudgetUsd, positions: {}, lastSigByWallet: {}, processedSigs: [] };
+  return { cashUsd: startingBudgetUsd, positions: {}, lastSigByWallet: {}, processedSigs: [], tokenBlacklist: {} };
 }
 
 export class PaperEngine {
@@ -91,6 +105,11 @@ export class PaperEngine {
   private killLookback: number;
   private topUpCap: number;
   private maxExposurePct: number;
+  private chaseGuardPct: number;
+  private dailyLossCapPct: number;
+  private timeStopHours: number;
+  private timeStopPct: number;
+  private reentryBlockHours: number;
   private dynamicLookback: number;
   private dynamicMaxMult: number;
   private dynamicMinMult: number;
@@ -108,6 +127,11 @@ export class PaperEngine {
     this.killLookback = opts.killSwitchLookbackSells ?? 0;
     this.topUpCap = opts.topUpCostCapMultiple ?? 2;
     this.maxExposurePct = opts.maxExposurePct ?? 0;
+    this.chaseGuardPct = opts.chaseGuardPct ?? 0;
+    this.dailyLossCapPct = opts.dailyLossCapPct ?? 0;
+    this.timeStopHours = opts.timeStopHours ?? 0;
+    this.timeStopPct = opts.timeStopPct ?? 0;
+    this.reentryBlockHours = opts.tokenReentryBlockHours ?? 0;
     this.dynamicLookback = opts.dynamicClipLookbackSells ?? 0;
     this.dynamicMaxMult = opts.dynamicClipMaxMultiplier ?? 1.5;
     this.dynamicMinMult = opts.dynamicClipMinMultiplier ?? 0.5;
@@ -187,6 +211,7 @@ export class PaperEngine {
         // Preserve the reset marker across restarts; otherwise the next boot
         // would re-trigger the reset and archive the live account.
         lastResetId: saved.lastResetId ?? this.state.lastResetId,
+        tokenBlacklist: saved.tokenBlacklist ?? {},
       };
       log.info(
         `restored: cash $${this.state.cashUsd.toFixed(2)}, ${Object.keys(this.state.positions).length} position(s), ` +
@@ -306,6 +331,30 @@ export class PaperEngine {
     if (this.isKilled(ev.wallet)) {
       log.warn(`KILL-SWITCH skip buy: ${short(ev.wallet)} ${symbol} (wallet below PnL/win-rate threshold)`);
       return;
+    }
+    if (this.dailyLossCapPct > 0) {
+      const floor = -(this.dailyLossCapPct / 100) * this.opts.startingBudgetUsd;
+      const dayPnl = this.todayRealizedPnl();
+      if (dayPnl <= floor) {
+        log.warn(
+          `DAILY-CAP skip buy: ${short(ev.wallet)} ${symbol} (day PnL $${dayPnl.toFixed(2)} <= $${floor.toFixed(2)}; new entries paused until the next UTC day)`,
+        );
+        return;
+      }
+    }
+    if (this.mintBlocked(ev.mint)) {
+      log.warn(`RE-ENTRY-BLOCK skip buy: ${short(ev.wallet)} ${symbol} (recent realized loss on this token)`);
+      return;
+    }
+    if (this.chaseGuardPct > 0 && ev.tokenDelta > 0) {
+      const implied = walletNotional / ev.tokenDelta;
+      if (implied > 0 && price > implied * (1 + this.chaseGuardPct / 100)) {
+        log.warn(
+          `CHASE skip buy: ${short(ev.wallet)} ${symbol} mark $${price.toPrecision(6)} is ` +
+            `${(((price - implied) / implied) * 100).toFixed(1)}% above the wallet's fill $${implied.toPrecision(6)} (> ${this.chaseGuardPct}%)`,
+        );
+        return;
+      }
     }
     const minWalletTradeUsd = this.opts.minWalletTradeUsdByWallet?.[ev.wallet] ?? this.opts.minWalletTradeUsd;
     if (walletNotional < minWalletTradeUsd) {
@@ -435,6 +484,7 @@ export class PaperEngine {
     this.state.cashUsd += proceeds;
     if (frac === 1) delete this.state.positions[key];
     const capitalAfter = this.capital();
+    if (pnlUsd < 0) this.blockMint(ev.mint, symbol);
 
     const trade: PaperTrade = {
       id: this.nextId(),
@@ -501,6 +551,34 @@ export class PaperEngine {
   }
 
   // ── risk gates ───────────────────────────────────────────────
+
+  /** Realized sell PnL since the current UTC day started. */
+  private todayRealizedPnl(): number {
+    const now = new Date();
+    const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    let pnl = 0;
+    for (const t of this.ledger) {
+      if (t.side === "sell" && t.ts >= dayStart) pnl += t.pnlUsd ?? 0;
+    }
+    return pnl;
+  }
+
+  /** Block re-buying a token after a realized-loss exit. */
+  private blockMint(mint: string, symbol: string): void {
+    if (this.reentryBlockHours <= 0) return;
+    if (!this.state.tokenBlacklist) this.state.tokenBlacklist = {};
+    this.state.tokenBlacklist[mint] = Date.now() + this.reentryBlockHours * 3_600_000;
+    log.info(`RE-ENTRY BLOCK: ${symbol} (${mint.slice(0, 8)}…) blocked for ${this.reentryBlockHours}h after a realized loss`);
+  }
+
+  private mintBlocked(mint: string): boolean {
+    const until = this.state.tokenBlacklist?.[mint] ?? 0;
+    if (until <= Date.now()) {
+      if (until) delete this.state.tokenBlacklist![mint];
+      return false;
+    }
+    return true;
+  }
 
   private walletStats(wallet: string, lookback = 0): { realizedPnl: number; sells: number; wins: number } {
     let realizedPnl = 0;
@@ -627,6 +705,13 @@ export class PaperEngine {
         info.priceUsd <= (pos.highestPriceUsd ?? entryPrice) * (1 - trailingStop / 100)
       ) {
         closes.push({ pos, priceUsd: info.priceUsd, reason: "trailing-stop" });
+      } else if (
+        this.timeStopHours > 0 &&
+        this.timeStopPct < 0 &&
+        Date.now() - pos.openedAt >= this.timeStopHours * 3_600_000 &&
+        pnlPct <= this.timeStopPct
+      ) {
+        closes.push({ pos, priceUsd: info.priceUsd, reason: "time-stop" });
       }
     }
     for (const { pos, priceUsd, reason } of closes) {
@@ -644,6 +729,7 @@ export class PaperEngine {
     const proceeds = pos.qty * fillPrice;
     const pnlUsd = proceeds - pos.costUsd;
     const pnlPct = pos.costUsd > 0 ? (pnlUsd / pos.costUsd) * 100 : 0;
+    if (pnlUsd < 0) this.blockMint(pos.mint, pos.symbol);
     const capitalBefore = this.capital();
 
     this.state.cashUsd += proceeds;

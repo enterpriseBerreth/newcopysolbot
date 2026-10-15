@@ -677,6 +677,120 @@ async function main(): Promise<void> {
   const mgResult = await manualGuard.closeAll("mg-1");
   expect(mgResult.skipped === 1 && mgResult.closed === 0 && Boolean(manualGuard.state.positions[`${WALLET}:${MINT_A}`]), "manual close defers a suspect-price position and reports it as skipped");
 
+  console.log("── profit guards ──");
+
+  // Chase guard: the SOL leg implies the wallet filled at $0.25 while the mark
+  // is $1.00 (300% above their fill) -> skipped before any capital moves.
+  const chaseDir = `${dataDir}-chase`;
+  const chasePrices = new Map<string, PairInfo>(prices);
+  const chase = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    chaseGuardPct: 15,
+    dataDir: chaseDir,
+    pairProvider: async (mint: string) => chasePrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await chase.load();
+  chasePrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await chase.onTrades([ev({ signature: "CHASE-1", tokenDelta: 200, solDelta: -5 })]);
+  expect(!chase.state.positions[`${WALLET}:${MINT_A}`] && approx(chase.state.cashUsd, 1000), "chase guard skips a buy whose mark is >15% above the wallet's SOL-leg fill");
+  await chase.onTrades([ev({ signature: "CHASE-2" })]);
+  expect(Boolean(chase.state.positions[`${WALLET}:${MINT_A}`]), "buy without an SOL leg is not blocked by the chase guard");
+
+  // Daily loss cap: a realized day loss past the cap pauses all new entries.
+  const capDir = `${dataDir}-dailycap`;
+  const capP = new Map<string, PairInfo>(prices);
+  const cap = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 10,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    killSwitchPnlUsd: 0,
+    dailyLossCapPct: 1,
+    dataDir: capDir,
+    pairProvider: async (mint: string) => capP.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await cap.load();
+  capP.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  capP.set(MINT_B, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "BBBB", dexId: "raydium", pairUrl: "" });
+  await cap.onTrades([ev({ signature: "CAP-BUY", tokenDelta: 1000 })]);
+  expect(Boolean(cap.state.positions[`${WALLET}:${MINT_A}`]), "daily cap: first entry taken while day PnL is above the floor");
+  capP.set(MINT_A, { priceUsd: 0.5, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await cap.onTrades([ev({ signature: "CAP-SELL", side: "sell", tokenDelta: 1000, remainingTokens: 0 })]);
+  const capLoss = cap.ledger.filter((t) => t.side === "sell").reduce((s, t) => s + (t.pnlUsd ?? 0), 0);
+  expect(capLoss <= -10, `losing exit pushes day PnL past the cap (realized ${capLoss.toFixed(2)})`);
+  capP.set(MINT_B, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "BBBB", dexId: "raydium", pairUrl: "" });
+  await cap.onTrades([ev({ signature: "CAP-BUY2", mint: MINT_B, tokenDelta: 1000 })]);
+  expect(!cap.state.positions[`${WALLET}:${MINT_B}`] && approx(cap.state.cashUsd, 1000 + capLoss, 0.01), "daily cap: new entries paused after the floor is breached");
+
+  // Token re-entry block: after a realized-loss exit the mint is blocked for
+  // every wallet until the block window expires.
+  const blkDir = `${dataDir}-blk`;
+  const blkPrices = new Map<string, PairInfo>(prices);
+  const blk = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    tokenReentryBlockHours: 6,
+    dataDir: blkDir,
+    pairProvider: async (mint: string) => blkPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await blk.load();
+  blkPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await blk.onTrades([ev({ signature: "BLK-BUY" })]);
+  expect(Boolean(blk.state.positions[`${WALLET}:${MINT_A}`]), "re-entry block: initial entry taken");
+  blkPrices.set(MINT_A, { priceUsd: 0.5, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await blk.onTrades([ev({ signature: "BLK-SELL", side: "sell", tokenDelta: 100, remainingTokens: 0 })]);
+  expect(!!blk.state.tokenBlacklist?.[MINT_A] && blk.state.tokenBlacklist[MINT_A] > Date.now(), "realized-loss exit blacklists the token");
+  blkPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await blk.onTrades([ev({ signature: "BLK-BUY2", wallet: SPAM_WALLET })]);
+  expect(!blk.state.positions[`${SPAM_WALLET}:${MINT_A}`], "re-entry block: another wallet cannot buy the blacklisted token");
+  blk.state.tokenBlacklist![MINT_A] = Date.now() - 1;
+  await blk.onTrades([ev({ signature: "BLK-BUY3", wallet: SPAM_WALLET })]);
+  expect(Boolean(blk.state.positions[`${SPAM_WALLET}:${MINT_A}`]), "re-entry block lifts once the window expires");
+
+  // Time stop: an aged position below the threshold exits as time-stop.
+  const tstDir = `${dataDir}-tst`;
+  const tstPrices = new Map<string, PairInfo>(prices);
+  const tst = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    timeStopHours: 1,
+    timeStopPct: -5,
+    dataDir: tstDir,
+    pairProvider: async (mint: string) => tstPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await tst.load();
+  tstPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await tst.onTrades([ev({ signature: "TS-BUY" })]);
+  tst.state.positions[`${WALLET}:${MINT_A}`]!.openedAt = Date.now() - 2 * 3_600_000;
+  await tst.markAll();
+  expect(Boolean(tst.state.positions[`${WALLET}:${MINT_A}`]), "time stop: young-enough loss stays open (only age + threshold close)");
+  tstPrices.set(MINT_A, { priceUsd: 0.9, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await tst.markAll();
+  expect(!tst.state.positions[`${WALLET}:${MINT_A}`] && tst.ledger.at(-1)!.reason === "time-stop", "time stop: aged position below the PnL threshold closes as time-stop");
+
   console.log("── risk gates ──");
 
   const MINT_C = "TokenCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";

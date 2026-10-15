@@ -62,6 +62,8 @@ export interface PaperState {
   lastManualCloseId?: string;
   /** Last applied capital-reset operation id (RESET_ID). */
   lastResetId?: string;
+  /** Token re-entry blacklist: mint -> blocked-until epoch ms (set after a realized-loss exit). */
+  tokenBlacklist?: Record<string, number>;
 }
 
 export interface PairInfo {
