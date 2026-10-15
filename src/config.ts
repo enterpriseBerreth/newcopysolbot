@@ -100,6 +100,11 @@ export const config = {
   // for this many hours. 0 disables.
   tokenReentryBlockHours: num("TOKEN_REENTRY_BLOCK_HOURS", 6),
 
+  // Whale rule: copied-wallet trades above this notional copy at whaleClipPct
+  // regardless of the wallet's normal/premium clip. 0 disables.
+  whaleTradeUsd: num("WHALE_TRADE_USD", 10_000),
+  whaleClipPct: num("WHALE_CLIP_PCT", 0.1),
+
   // Dynamic clip sizing: scale a wallet's clip up/down based on its last N sells.
   // 0 disables (static 1% / 10%).
   dynamicClipLookbackSells: num("DYNAMIC_CLIP_LOOKBACK_SELLS", 20),

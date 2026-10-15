@@ -60,6 +60,10 @@ export interface EngineOpts {
   /** After a realized-loss exit, block re-buying that token (any wallet) for
    *  this many hours. 0 disables. */
   tokenReentryBlockHours?: number;
+  /** Copied-wallet trades above this notional copy at whaleClipPct. 0 disables. */
+  whaleTradeUsd?: number;
+  /** Clip % for whale-size copied trades (overrides premium/dynamic sizing). */
+  whaleClipPct?: number;
   /** Dynamic clip: if >0, scale this wallet's clip up/down based on the last N closed sells. */
   dynamicClipLookbackSells?: number;
   /** Dynamic clip: boost multiplier cap (default 1.5). */
@@ -110,6 +114,8 @@ export class PaperEngine {
   private timeStopHours: number;
   private timeStopPct: number;
   private reentryBlockHours: number;
+  private whaleTradeUsd: number;
+  private whaleClipPct: number;
   private dynamicLookback: number;
   private dynamicMaxMult: number;
   private dynamicMinMult: number;
@@ -132,6 +138,8 @@ export class PaperEngine {
     this.timeStopHours = opts.timeStopHours ?? 0;
     this.timeStopPct = opts.timeStopPct ?? 0;
     this.reentryBlockHours = opts.tokenReentryBlockHours ?? 0;
+    this.whaleTradeUsd = opts.whaleTradeUsd ?? 0;
+    this.whaleClipPct = opts.whaleClipPct ?? 0.1;
     this.dynamicLookback = opts.dynamicClipLookbackSells ?? 0;
     this.dynamicMaxMult = opts.dynamicClipMaxMultiplier ?? 1.5;
     this.dynamicMinMult = opts.dynamicClipMinMultiplier ?? 0.5;
@@ -384,8 +392,9 @@ export class PaperEngine {
     const tokenCost = positions.filter((pos) => pos.mint === ev.mint).reduce((sum, pos) => sum + pos.costUsd, 0);
     const exposureLimit = this.maxExposurePct > 0 ? (this.capital() * this.maxExposurePct) / 100 : Infinity;
     const dynamicMult = this.dynamicClipMultiplier(ev.wallet);
-    const rawChoices = premium ? [primaryPct, fallbackPct] : [primaryPct];
-    const choices = rawChoices.map((pct) => Math.max(0.1, pct * dynamicMult));
+    const whale = this.whaleTradeUsd > 0 && walletNotional > this.whaleTradeUsd;
+    const rawChoices = whale ? [this.whaleClipPct] : premium ? [primaryPct, fallbackPct] : [primaryPct];
+    const choices = rawChoices.map((pct) => (whale ? pct : Math.max(0.1, pct * dynamicMult)));
     const appliedPct = choices.find((pct) => {
       const amount = (walletNotional * pct) / 100;
       return amount > 0 && this.state.cashUsd >= amount &&
@@ -443,7 +452,7 @@ export class PaperEngine {
     };
     await this.appendLedger(trade);
     log.info(
-      `BUY ${symbol}: ${short(ev.wallet)} spent ~$${walletNotional.toFixed(0)} -> we clip ${appliedPct}% ($${ourUsd.toFixed(2)}) ` +
+      `BUY ${symbol}: ${short(ev.wallet)} spent ~$${walletNotional.toFixed(0)} -> we clip ${appliedPct}%${whale ? " (whale rule)" : ""} ($${ourUsd.toFixed(2)}) ` +
         `@ $${fillPrice.toPrecision(6)} (qty ${qty.toPrecision(6)}), cash $${this.state.cashUsd.toFixed(2)}`,
     );
     // No Telegram alert for entries: only CLOSED trades alert.

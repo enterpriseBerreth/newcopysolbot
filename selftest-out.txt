@@ -1,0 +1,329 @@
+
+> newcopysolbot@1.0.0 selftest
+> tsx src/selftest.ts ; rg passed,|FAIL|TypeError selftest-out.txt
+
+── wallet roster ──
+  ok: wallet roster contains 23 unique addresses
+  ok: all seven added wallets remain tracked in shadow mode at standard 1% clip configuration
+  ok: standard clip remains 1% for new wallets
+  ok: five requested wallets stay tracked but are shadow-only, not premium
+  ok: wallets ranked 3–23 are shadowed exactly once; only the top two remain live
+  ok: liquidity-leading extreme outlier cannot set the token mark
+── decoder ──
+  ok: buy tx yields exactly one event
+  ok: buy event has right side + mint
+  ok: buy tokenDelta = 100
+  ok: buy remainingTokens = 100
+  ok: decoder fixture uses live RPC uiTokenAmount shape
+  ok: live-shaped USDC buy decodes token balance difference
+  ok: sell detected
+  ok: sell tokenDelta = 40
+  ok: sell remaining = 60 (fraction = 40/100)
+  ok: plain transfer (no DEX program) is not copied
+  ok: failed tx is not copied
+  ok: stablecoin-only change is not copied
+  ok: multiple tokens cannot each claim the full SOL spend
+── engine ──
+[36m2026-10-15T01:27:49.829Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.833Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+  ok: entry clip = $1 (1% of $100 notional)
+  ok: entry qty = clip / slipped price
+  ok: position symbol set
+  ok: no telegram alert on entry (closed trades only)
+[36m2026-10-15T01:27:49.836Z [INFO] [paper][0m skip dust buy: Copy…1111 AAAA notional $40.00 < $50
+  ok: dust buy (< $50 wallet notional) skipped
+[36m2026-10-15T01:27:49.841Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $998.00
+  ok: top-up raises cost to $2
+  ok: top-up adds qty at new fill
+[36m2026-10-15T01:27:49.845Z [INFO] [paper][0m SELL AAAA: Copy…1111 sold ~$120 -> we exit 25% for $0.98 (PnL $0.48 / 96.0%), cash $998.98
+  ok: partial exit sells the mirrored 25% of our bag
+  ok: partial exit books a profit (price doubled)
+  ok: cash refilled by exit proceeds
+[36m2026-10-15T01:27:49.848Z [INFO] [paper][0m SELL AAAA: Copy…1111 sold ~$360 -> we exit 100% for $2.94 (PnL $1.44 / 96.0%), cash $1001.92
+  ok: full exit removes position
+  ok: close alert carries full wallet + token address
+  ok: close alert carries PnL + capital before/after
+  ok: capital = budget + realized PnL (profits compound)
+[36m2026-10-15T01:27:49.852Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $2.02000 (qty 0.495050), cash $1000.92
+  ok: stop-loss (-40%) force-closes position
+  ok: stop-loss trade booked with reason + loss
+[36m2026-10-15T01:27:49.859Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.860Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $99.00
+  ok: stop-loss uses its triggering mark without a second price fetch
+  ok: stop-loss exit uses the price that actually triggered it
+[36m2026-10-15T01:27:49.867Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$60 -> we clip 1% ($0.60) @ $1.01000 (qty 0.594059), cash $1000.81
+  ok: clip = 1% of wallet's real $60 SOL spend
+  ok: entry qty uses copy-time market price, not wallet's earlier $0.60 fill
+  ok: ledger records market entry plus entry slippage
+[36m2026-10-15T01:27:49.870Z [INFO] [paper][0m SELL AAAA: Copy…1111 sold ~$12 -> we exit 40% for $0.24 (PnL $-0.00 / -2.0%), cash $1001.05
+  ok: exit fill uses copy-time market price, not wallet's earlier $0.30 fill
+  ok: exit still mirrors the sold fraction of the bag
+[36m2026-10-15T01:27:49.872Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $1000.05
+  ok: derived fill 20x off market is rejected; market price used
+  ok: rankings cover the traded wallet
+  ok: daily trade count reflects ledger
+  ok: daily pos/neg breakdown counts wins and losses
+  ok: report lists trades with pos/neg split
+[36m2026-10-15T01:27:49.879Z [INFO] [paper][0m restored: cash $1000.05, 1 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:49.880Z [INFO] [paper][0m loaded 9 ledger trade(s)
+  ok: ledger rebuilt from disk on restart
+  ok: processed trade dedup survives restart
+  ok: replayed wallet/mint trade cannot double-spend after restart
+[36m2026-10-15T01:27:49.884Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$200 -> we clip 1% ($2.00) @ $1.01000 (qty 1.98020), cash $998.05
+  ok: all token mints in one signature are processed
+[36m2026-10-15T01:27:49.887Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+  ok: unaffordable buy is skipped entirely
+  ok: cash untouched when skipping unaffordable buy
+  ok: no alert for skipped entry
+  ok: rankings include wallets with no paper trades
+[36m2026-10-15T01:27:49.890Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.892Z [INFO] [paper][0m BUY AAAA: 29yF…kbw8 spent ~$1000 -> we clip 10% ($100.00) @ $1.01000 (qty 99.0099), cash $900.00
+  ok: premium wallet 1 copies 10% of $1,000
+[36m2026-10-15T01:27:49.896Z [INFO] [paper][0m BUY AAAA: 9BMz…QdLU spent ~$1000 -> we clip 10% ($100.00) @ $1.01000 (qty 99.0099), cash $800.00
+  ok: premium wallet 2 copies 10% of $1,000
+[36m2026-10-15T01:27:49.900Z [INFO] [paper][0m BUY AAAA: CHCL…4aBX spent ~$1000 -> we clip 10% ($100.00) @ $1.01000 (qty 99.0099), cash $700.00
+  ok: premium wallet 3 copies 10% of $1,000
+[36m2026-10-15T01:27:49.904Z [INFO] [paper][0m BUY AAAA: Ordi…1111 spent ~$1000 -> we clip 1% ($10.00) @ $1.01000 (qty 9.90099), cash $690.00
+  ok: non-premium wallet remains on 1% clips
+[36m2026-10-15T01:27:49.907Z [INFO] [paper][0m BUY AAAA: 9azt…gKjv spent ~$1000 -> we clip 1% ($10.00) @ $1.01000 (qty 9.90099), cash $680.00
+  ok: newly added wallet copies at 1%, not the premium tier
+[36m2026-10-15T01:27:49.910Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.911Z [INFO] [paper][0m BUY AAAA: 9BMz…QdLU spent ~$1000 -> we clip 10% ($100.00) @ $1.01000 (qty 99.0099), cash $0.00
+  ok: premium 10% clip uses exact available cash
+[36m2026-10-15T01:27:49.914Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.915Z [INFO] [paper][0m BUY AAAA: CHCL…4aBX spent ~$1000 -> we clip 5% ($50.00) @ $1.01000 (qty 49.5050), cash $25.00
+  ok: premium 10% unaffordable falls back to 5% first clip
+  ok: premium buy is skipped when even 5% is unaffordable
+[36m2026-10-15T01:27:49.921Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.922Z [INFO] [paper][0m BUY AAAA: 29yF…kbw8 spent ~$1000 -> we clip 10% ($100.00) @ $1.01000 (qty 99.0099), cash $160.00
+[36m2026-10-15T01:27:49.926Z [INFO] [paper][0m BUY AAAA: 29yF…kbw8 spent ~$1000 -> we clip 10% ($100.00) @ $1.01000 (qty 99.0099), cash $60.00
+  ok: top-up cap blocks fallback beyond 2x first premium clip
+[36m2026-10-15T01:27:49.931Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.932Z [INFO] [paper][0m BUY AAAA: 29yF…kbw8 spent ~$1000 -> we clip 10% ($100.00) @ $1.01000 (qty 99.0099), cash $75.00
+[36m2026-10-15T01:27:49.935Z [INFO] [paper][0m BUY AAAA: 29yF…kbw8 spent ~$1000 -> we clip 5% ($50.00) @ $1.01000 (qty 49.5050), cash $25.00
+  ok: premium top-up falls back to 5% within cap
+[36m2026-10-15T01:27:49.938Z [INFO] [paper][0m SELL AAAA: 29yF…kbw8 sold ~$500 -> we exit 50% for $73.51 (PnL $-1.49 / -2.0%), cash $98.51
+  ok: premium exit mirrors sold fraction and leaves proportional cost basis
+[36m2026-10-15T01:27:49.941Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.942Z [INFO] [paper][0m BUY AAAA: 29yF…kbw8 spent ~$2000 -> we clip 5% ($100.00) @ $1.01000 (qty 99.0099), cash $900.00
+  ok: exposure limit chooses the 5% clip when 10% exceeds 15% of capital
+[36m2026-10-15T01:27:49.945Z [INFO] [paper][0m BUY BBBB: 29yF…kbw8 spent ~$1000 -> we clip 5% ($50.00) @ $1.01000 (qty 49.5050), cash $850.00
+  ok: wallet-wide exposure triggers fallback even on another token
+  ok: entry is skipped when both premium clips exceed wallet exposure
+  ok: token-wide exposure blocks another wallet from concentrating in the same mint
+[36m2026-10-15T01:27:49.954Z [INFO] [paper][0m BUY AAAA: Ordi…1111 spent ~$500 -> we clip 1% ($5.00) @ $1.01000 (qty 4.95050), cash $845.00
+  ok: ordinary 1% clips are still permitted when exposure remains
+[36m2026-10-15T01:27:49.957Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.958Z [INFO] [paper][0m BUY AAAA: 29yF…kbw8 spent ~$9000 -> we clip 10% ($900.00) @ $1.01000 (qty 891.089), cash $100.00
+[36m2026-10-15T01:27:49.962Z [INFO] [paper][0m restored: cash $100.00, 1 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:49.963Z [INFO] [paper][0m loaded 1 ledger trade(s)
+[36m2026-10-15T01:27:49.964Z [INFO] [paper][0m SELL AAAA: 29yF…kbw8 sold ~$9000 -> we exit 100% for $882.18 (PnL $-17.82 / -2.0%), cash $982.18
+  ok: existing position above exposure cap may still exit normally
+[36m2026-10-15T01:27:49.966Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.967Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $99.00
+[36m2026-10-15T01:27:49.970Z [INFO] [paper][0m SELL AAAA: Copy…1111 sold ~$100 -> we exit 100% for $0.98 (PnL $-0.02 / -2.0%), cash $99.98
+  ok: tiny residual after partial exit retains cost basis
+  ok: partial exits preserve the capital accounting invariant
+[36m2026-10-15T01:27:49.974Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:49.975Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $99.00
+[36m2026-10-15T01:27:49.977Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $98.00
+  ok: manual close sells priced positions and leaves unpriced positions open
+  ok: manual close records sale and sends closed-trade alert
+[36m2026-10-15T01:27:51.088Z [INFO] [paper][0m restored: cash $99.96, 1 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:51.089Z [INFO] [paper][0m loaded 3 ledger trade(s)
+  ok: manual close cannot repeat after restart with the same operation id
+  ok: new operation id closes previously unpriced position
+  ok: manual liquidation reconciles cash and notifies for both winning and losing closes
+[36m2026-10-15T01:27:52.206Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.207Z [INFO] [paper][0m SHADOW skip buy: Copy…1111 TokenAAA… qty 100.000 (shadow wallet, no capital deployed)
+  ok: shadow wallet buy deploys no capital
+  ok: shadow wallet trade is counted but not ledgered
+  ok: shadow wallet sell is ignored without position
+  ok: shadow wallet stays in rankings with zero activity
+[36m2026-10-15T01:27:52.212Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.213Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+[36m2026-10-15T01:27:52.218Z [INFO] [paper][0m BUY BBBB: Spam…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $998.00
+[36m2026-10-15T01:27:52.222Z [INFO] [paper][0m restored: cash $998.00, 2 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:52.223Z [INFO] [paper][0m loaded 2 ledger trade(s)
+  ok: unpriced shadow migration leaves existing paper position open for a later mark
+  ok: shadow migration closes only the newly shadowed wallet's paper position
+  ok: shadow migration records proceeds and reconciles paper capital
+  ok: migrated paper close sends a closed-trade alert
+[36m2026-10-15T01:27:52.228Z [INFO] [paper][0m SHADOW skip buy: Copy…1111 TokenAAA… qty 100.000 (shadow wallet, no capital deployed)
+  ok: shadow wallet cannot reopen a paper position or repeat migration
+[36m2026-10-15T01:27:52.232Z [INFO] [paper][0m restored: cash $999.96, 1 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:52.233Z [INFO] [paper][0m loaded 3 ledger trade(s)
+  ok: shadow migration remains idempotent after restart
+[36m2026-10-15T01:27:52.234Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.236Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+[36m2026-10-15T01:27:52.242Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+  ok: reset archives the traded account and starts fresh
+  ok: reset produced a snapshot archive
+[36m2026-10-15T01:27:52.250Z [INFO] [paper][0m restored: cash $999.00, 1 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:52.251Z [INFO] [paper][0m loaded 1 ledger trade(s)
+  ok: boot restore moves the archived state back into place
+  ok: restored state carries the reset marker to avoid re-archiving
+  ok: restored ledger includes archived trades
+  ok: restore consumes the archive files so re-boots are no-ops
+[36m2026-10-15T01:27:52.255Z [INFO] [paper][0m restored: cash $999.00, 1 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:52.256Z [INFO] [paper][0m loaded 1 ledger trade(s)
+  ok: second boot with the same stamp keeps the restored state
+── price guards ──
+  ok: 5x jumps in either direction are suspect
+  ok: small moves and zero prices are not suspect
+[36m2026-10-15T01:27:52.257Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.258Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+  ok: guard test entry priced at 1.01
+  ok: copy sell at a 100x suspect price is deferred, position untouched
+  ok: first mark after the deferred sell still defers (2/3 strikes)
+  ok: third repeated suspect price is accepted and the take-profit close executes
+  ok: accepted close books proceeds at the confirmed price minus exit slippage
+[36m2026-10-15T01:27:52.266Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.267Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+  ok: manual close defers a suspect-price position and reports it as skipped
+── profit guards ──
+[36m2026-10-15T01:27:52.272Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+  ok: chase guard skips a buy whose mark is >15% above the wallet's SOL-leg fill
+[36m2026-10-15T01:27:52.275Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+  ok: buy without an SOL leg is not blocked by the chase guard
+[36m2026-10-15T01:27:52.279Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.280Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$1000 -> we clip 10% ($100.00) @ $1.01000 (qty 99.0099), cash $900.00
+  ok: daily cap: first entry taken while day PnL is above the floor
+[36m2026-10-15T01:27:52.283Z [INFO] [paper][0m SELL AAAA: Copy…1111 sold ~$500 -> we exit 100% for $49.01 (PnL $-50.99 / -51.0%), cash $949.01
+  ok: losing exit pushes day PnL past the cap (realized -50.99)
+  ok: daily cap: new entries paused after the floor is breached
+[36m2026-10-15T01:27:52.288Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.289Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+  ok: re-entry block: initial entry taken
+[36m2026-10-15T01:27:52.291Z [INFO] [paper][0m RE-ENTRY BLOCK: AAAA (TokenAAA…) blocked for 6h after a realized loss
+[36m2026-10-15T01:27:52.292Z [INFO] [paper][0m SELL AAAA: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $999.49
+  ok: realized-loss exit blacklists the token
+  ok: re-entry block: another wallet cannot buy the blacklisted token
+[36m2026-10-15T01:27:52.302Z [INFO] [paper][0m BUY AAAA: Spam…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $998.49
+  ok: re-entry block lifts once the window expires
+[36m2026-10-15T01:27:52.305Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.307Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+  ok: time stop: young-enough loss stays open (only age + threshold close)
+  ok: time stop: aged position below the PnL threshold closes as time-stop
+── risk gates ──
+[36m2026-10-15T01:27:52.313Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.314Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+[36m2026-10-15T01:27:52.317Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $998.00
+[36m2026-10-15T01:27:52.321Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $998.49
+[36m2026-10-15T01:27:52.324Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $997.49
+[36m2026-10-15T01:27:52.328Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $997.98
+[36m2026-10-15T01:27:52.331Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $996.98
+[36m2026-10-15T01:27:52.334Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $997.47
+[36m2026-10-15T01:27:52.337Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $996.47
+[36m2026-10-15T01:27:52.340Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $996.96
+[36m2026-10-15T01:27:52.343Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $995.96
+[36m2026-10-15T01:27:52.346Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $996.45
+[36m2026-10-15T01:27:52.349Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $995.45
+[36m2026-10-15T01:27:52.352Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $995.94
+[36m2026-10-15T01:27:52.355Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $994.94
+[36m2026-10-15T01:27:52.358Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $995.43
+[36m2026-10-15T01:27:52.361Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $994.43
+[36m2026-10-15T01:27:52.364Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $994.92
+[36m2026-10-15T01:27:52.367Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $993.92
+[36m2026-10-15T01:27:52.370Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $994.41
+[36m2026-10-15T01:27:52.373Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $993.41
+[36m2026-10-15T01:27:52.376Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$50 -> we exit 100% for $0.49 (PnL $-0.51 / -51.0%), cash $993.90
+  ok: ten losing rounds push wallet past the kill threshold (realized -5.10)
+  ok: killed wallet cannot open new positions
+[36m2026-10-15T01:27:52.381Z [INFO] [paper][0m SELL AAAA: Copy…1111 sold ~$400 -> we exit 100% for $3.92 (PnL $2.92 / 292.1%), cash $997.82
+  ok: wallet auto-re-enables after realized PnL recovers
+[36m2026-10-15T01:27:52.384Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$50 -> we clip 1% ($0.50) @ $0.505000 (qty 0.990099), cash $997.32
+  ok: re-enabled wallet can buy again
+[36m2026-10-15T01:27:52.387Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.389Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+[36m2026-10-15T01:27:52.393Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$99 -> we exit 100% for $0.97 (PnL $-0.03 / -3.0%), cash $999.97
+[36m2026-10-15T01:27:52.396Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $998.97
+[36m2026-10-15T01:27:52.399Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$99 -> we exit 100% for $0.97 (PnL $-0.03 / -3.0%), cash $999.94
+[36m2026-10-15T01:27:52.401Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $998.94
+[36m2026-10-15T01:27:52.403Z [INFO] [paper][0m SELL BBBB: Copy…1111 sold ~$99 -> we exit 100% for $0.97 (PnL $-0.03 / -3.0%), cash $999.91
+  ok: wallet with 0% win rate over the sell minimum is killed
+  ok: win-rate-killed wallet cannot open positions
+  ok: killSwitchedWallets reports the killed wallet
+[36m2026-10-15T01:27:52.408Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+  ok: buy into token below the liquidity floor is skipped
+[36m2026-10-15T01:27:52.411Z [INFO] [paper][0m BUY CCCC: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+  ok: buy into token above the liquidity floor proceeds
+[36m2026-10-15T01:27:52.414Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:52.415Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+[36m2026-10-15T01:27:52.418Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $998.00
+  ok: top-up reaching exactly the cap multiple is allowed
+  ok: top-up beyond the cap multiple is skipped
+  ok: only cap-compliant top-ups are ledgered
+── rpc batch compatibility ──
+  ok: batch-rejecting RPC still fetches all requested transactions in order
+  ok: HTTP 400 batch rejection disables batching after the first attempt
+  ok: batch-capable RPC preserves response ordering by id
+── telegram report delivery ──
+  ok: long rankings split without losing or reordering wallet lines
+  ok: even an oversized single line is split safely
+  ok: report sends every chunk in order and reports successful delivery
+  ok: Telegram HTTP rejection is reported instead of falsely logging report sent
+  ok: disabled notifier does not claim successful report delivery
+── watcher cursor ──
+[36m2026-10-15T01:27:54.007Z [INFO] [watcher][0m Copy…1111: 1 trade event(s) in S2
+  ok: cursor skips already-seen sigs, processes only S2
+  ok: watcher emitted decoded buy from S2
+  ok: failed transaction does not advance wallet cursor
+[36m2026-10-15T01:27:54.007Z [INFO] [watcher][0m Copy…1111: 1 trade event(s) in S2
+  ok: retry processes failed transaction and advances cursor
+── ws push watcher ──
+  ok: fake ws instance created
+[36m2026-10-15T01:27:54.008Z [INFO] [ws][0m connected; subscribing 1 wallet(s) via logsSubscribe
+  ok: subscribes tracked wallets via mentions on open
+[36m2026-10-15T01:27:54.008Z [INFO] [ws][0m all 1 wallet subscriptions confirmed
+  ok: confirmed subscription makes WebSocket healthy
+  ok: ws push decodes the trade and dedups duplicate notifications
+  ok: ws transaction processing uses batched RPC fetch
+  ok: ws fetches queued transactions in batches and drains them (1,1,2)
+── ws shadow sampling ──
+[36m2026-10-15T01:27:54.223Z [INFO] [ws][0m connected; subscribing 1 wallet(s) via logsSubscribe
+[36m2026-10-15T01:27:54.223Z [INFO] [ws][0m all 1 wallet subscriptions confirmed
+  ok: shadow watcher subscription confirmed
+  ok: first shadow notification sampled and fetched
+  ok: subsequent shadow notifications within the sample window are dropped
+── ws spam sampling ──
+[36m2026-10-15T01:27:54.348Z [INFO] [ws][0m connected; subscribing 1 wallet(s) via logsSubscribe
+[36m2026-10-15T01:27:54.348Z [INFO] [ws][0m all 1 wallet subscriptions confirmed
+  ok: live spam wallet samples up to 5 notifications per window and drops the rest
+── shadow sim ──
+[36m2026-10-15T01:27:54.474Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+  ok: splitShadowEvents routes shadow wallet events to the sim lane
+[36m2026-10-15T01:27:54.475Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $9999.00
+  ok: shadow sim deploys virtual capital on a copied entry
+  ok: splitShadowEvents routes non-shadow events to the live lane
+[36m2026-10-15T01:27:54.480Z [INFO] [paper][0m SELL AAAA: Copy…1111 sold ~$200 -> we exit 100% for $1.96 (PnL $0.96 / 96.0%), cash $10000.96
+  ok: shadow sim books realized PnL into its virtual capital
+[36m2026-10-15T01:27:54.484Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $9999.96
+[36m2026-10-15T01:27:54.489Z [INFO] [paper][0m BUY BBBB: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $9998.96
+  ok: shadow sim keeps trading with the kill switch disabled
+  ok: formatRankings renders the shadow-sim line when sim fields are present
+  ok: formatRankings omits the sim line for non-sim rows
+── bot classification ──
+  ok: 80% fail rate + 1s tx cadence classifies as bot-like
+  ok: low-frequency trading with few failures classifies as human
+  ok: wallet with no history is not flagged as a bot
+── capital reset ──
+[36m2026-10-15T01:27:54.494Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+[36m2026-10-15T01:27:54.496Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+  ok: reset engine starts at its budget and trades normally
+[36m2026-10-15T01:27:54.503Z [INFO] [paper][0m restored: cash $999.00, 1 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:54.504Z [INFO] [paper][0m loaded 1 ledger trade(s)
+  ok: same reset id on restart preserves state
+[36m2026-10-15T01:27:54.508Z [INFO] [paper][0m no snapshot found; starting fresh paper account
+  ok: new reset id archives state and starts fresh at the budget
+[36m2026-10-15T01:27:54.513Z [INFO] [paper][0m restored: cash $1000.00, 0 position(s), 0 wallet cursor(s)
+  ok: reset id is idempotent: no re-archival on next boot
+[36m2026-10-15T01:27:54.516Z [INFO] [paper][0m restored: cash $1000.00, 0 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:54.517Z [INFO] [paper][0m BUY AAAA: Copy…1111 spent ~$100 -> we clip 1% ($1.00) @ $1.01000 (qty 0.990099), cash $999.00
+[36m2026-10-15T01:27:54.524Z [INFO] [paper][0m restored: cash $999.00, 1 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:54.526Z [INFO] [paper][0m loaded 1 ledger trade(s)
+[36m2026-10-15T01:27:54.530Z [INFO] [paper][0m restored: cash $999.00, 1 position(s), 0 wallet cursor(s)
+[36m2026-10-15T01:27:54.532Z [INFO] [paper][0m loaded 1 ledger trade(s)
+  ok: load/save cycle preserves lastResetId: no spurious re-reset
+
+164 passed, 0 failed

@@ -95,7 +95,14 @@ async function main(): Promise<void> {
     "8ZN71XTdVo8yRovnGLmNgW3Tgniw6A4J3JGLvPD686FP",
   ];
   const roster = DEFAULT_WALLETS.split(",");
-  expect(roster.length === 23 && new Set(roster).size === 23, "wallet roster contains 23 unique addresses");
+  expect(roster.length === 27 && new Set(roster).size === 27, "wallet roster contains 27 unique addresses");
+  const latestAdds = [
+    "AusMtCwzrPnPoJUSHYUH9iogVwpWh2ESHC6xWU75tBDo",
+    "6vbrTLsWy76TxDQAUKLqZrPohQuq6EVaJgfGzR82paFa",
+    "BL9N8Xfp3Zs1aH91pYSJQcgEMZo2romXzFnosENtZwdU",
+    "7cr6VxjS9dxK99s9uaFMFR3KHSe8VpSdhGytq1kR72GL",
+  ];
+  expect(latestAdds.every((wallet) => roster.includes(wallet) && !config.premiumWallets.includes(wallet)), "newly added wallets are tracked at the standard 1% clip (not premium)");
   expect(newWallets.every((wallet) => roster.includes(wallet) && config.shadowWallets.includes(wallet) && !config.premiumWallets.includes(wallet)), "all seven added wallets remain tracked in shadow mode at standard 1% clip configuration");
   expect(config.clipPct === 1, "standard clip remains 1% for new wallets");
   const movedToShadow = [
@@ -790,6 +797,31 @@ async function main(): Promise<void> {
   tstPrices.set(MINT_A, { priceUsd: 0.9, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
   await tst.markAll();
   expect(!tst.state.positions[`${WALLET}:${MINT_A}`] && tst.ledger.at(-1)!.reason === "time-stop", "time stop: aged position below the PnL threshold closes as time-stop");
+
+  // Whale rule: a copied trade above the threshold clips at the whale clip,
+  // regardless of the wallet's normal clip; sub-threshold trades are unchanged.
+  const whlDir = `${dataDir}-whale`;
+  const whlPrices = new Map<string, PairInfo>(prices);
+  const whl = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 50,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 40,
+    whaleTradeUsd: 500,
+    whaleClipPct: 0.1,
+    dataDir: whlDir,
+    pairProvider: async (mint: string) => whlPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await whl.load();
+  whlPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await whl.onTrades([ev({ signature: "WHL-1", tokenDelta: 1000 })]);
+  expect(approx(whl.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 1, 1e-9), "whale trade ($1000 > $500 threshold) copies at the 0.1% whale clip");
+  await whl.onTrades([ev({ signature: "WHL-2", wallet: SPAM_WALLET, tokenDelta: 200 })]);
+  expect(approx(whl.state.positions[`${SPAM_WALLET}:${MINT_A}`]!.costUsd, 2, 1e-9), "sub-whale trade still copies at the standard 1% clip");
 
   console.log("── risk gates ──");
 
