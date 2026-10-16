@@ -811,17 +811,27 @@ async function main(): Promise<void> {
     exitSlippagePct: 1,
     stopLossPct: 40,
     whaleTradeUsd: 500,
-    whaleClipPct: 0.1,
+    whaleClipPct: 1,
+    whaleFallbackClipPct: 0.5,
+    whaleMegaTradeUsd: 5000,
+    whaleMegaClipPct: 0.1,
+    topUpCostCapMultiple: 0,
     dataDir: whlDir,
     pairProvider: async (mint: string) => whlPrices.get(mint) ?? null,
     solPriceProvider: async () => 10,
   });
   await whl.load();
   whlPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  whlPrices.set(MINT_B, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "BBBB", dexId: "raydium", pairUrl: "" });
   await whl.onTrades([ev({ signature: "WHL-1", tokenDelta: 1000 })]);
-  expect(approx(whl.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 1, 1e-9), "whale trade ($1000 > $500 threshold) copies at the 0.1% whale clip");
+  expect(approx(whl.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 10, 1e-9), "whale trade ($1000 > $500 threshold) copies at the 1% whale clip");
   await whl.onTrades([ev({ signature: "WHL-2", wallet: SPAM_WALLET, tokenDelta: 200 })]);
   expect(approx(whl.state.positions[`${SPAM_WALLET}:${MINT_A}`]!.costUsd, 2, 1e-9), "sub-whale trade still copies at the standard 1% clip");
+  await whl.onTrades([ev({ signature: "WHL-3", wallet: SPAM_WALLET, mint: MINT_B, tokenDelta: 10000 })]);
+  expect(approx(whl.state.positions[`${SPAM_WALLET}:${MINT_B}`]!.costUsd, 10, 1e-9), "mega-whale trade ($10000 > $5000 threshold) copies at the 0.1% mega clip");
+  whl.state.cashUsd = 20;
+  await whl.onTrades([ev({ signature: "WHL-4", tokenDelta: 3000 })]);
+  expect(approx(whl.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 25, 0.5), "whale trade falls back to 0.5% clip when 1% cannot fit");
 
   console.log("── risk gates ──");
 

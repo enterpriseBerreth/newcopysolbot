@@ -38,8 +38,11 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 | `TIME_STOP_HOURS` | `24` | Exit positions older than this when below `TIME_STOP_PCT`; 0 disables |
 | `TIME_STOP_PCT` | `-5` | Time-stop PnL threshold (%); 0 disables |
 | `TOKEN_REENTRY_BLOCK_HOURS` | `6` | After a realized-loss exit, block re-buying that token (any wallet) for this long; 0 disables |
-| `WHALE_TRADE_USD` | `10000` | Copied-wallet trades above this notional copy at `WHALE_CLIP_PCT`; 0 disables |
-| `WHALE_CLIP_PCT` | `0.1` | Clip % for whale-size copied trades (overrides premium/dynamic sizing) |
+| `WHALE_TRADE_USD` | `10000` | Copied-wallet trades above this notional copy at `WHALE_CLIP_PCT` (fallback `WHALE_FALLBACK_CLIP_PCT`); 0 disables |
+| `WHALE_CLIP_PCT` | `1` | Clip % for whale-size copied trades (overrides premium/dynamic sizing) |
+| `WHALE_FALLBACK_CLIP_PCT` | `0.5` | Fallback clip when `WHALE_CLIP_PCT` cannot fit the budget |
+| `WHALE_MEGA_TRADE_USD` | `100000` | Copied-wallet trades above this copy at `WHALE_MEGA_CLIP_PCT`; 0 disables |
+| `WHALE_MEGA_CLIP_PCT` | `0.1` | Clip % for mega-whale copied trades |
 | `DYNAMIC_CLIP_LOOKBACK_SELLS` | `20` | Scale clips 0.6x–1.5x by recent performance; 0 disables |
 | `MAX_POSITIONS` | `1000` | Safety valve — concurrency is budget-bound |
 | `ENTRY_SLIPPAGE_PCT` / `EXIT_SLIPPAGE_PCT` | `1` | Fill realism |
