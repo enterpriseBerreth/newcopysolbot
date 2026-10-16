@@ -4,3 +4,4 @@ dist/
 data/
 *.log
 "selftest-out.txt"  
+st.txt
