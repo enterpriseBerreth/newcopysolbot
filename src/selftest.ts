@@ -880,6 +880,109 @@ async function main(): Promise<void> {
   await es.onTrades([ev({ signature: "ES-5", tokenDelta: 500000 })]);
   expect(approx(es.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 552.5, 1e-9), "entry scale: $500k wallet trade stays at 0.1% (unbounded top tier)");
 
+  console.log("── market realism ──");
+
+  // Fees: 1% per side comes out of received tokens / sale proceeds.
+  const feeDir = `${dataDir}-fee`;
+  const feePrices = new Map<string, PairInfo>(prices);
+  const fee = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 10,
+    minWalletTradeUsd: 10,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 0,
+    feePct: 1,
+    dataDir: feeDir,
+    pairProvider: async (mint: string) => feePrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await fee.load();
+  feePrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await fee.onTrades([ev({ signature: "FEE-1", tokenDelta: 1000 })]);
+  const feePos = fee.state.positions[`${WALLET}:${MINT_A}`]!;
+  expect(approx(feePos.costUsd, 100, 1e-9) && approx(feePos.qty, 100 * 0.99 / 1.01, 1e-9), "fees: buy books full cash cost but 1% fewer tokens");
+  const feeQty = feePos.qty;
+  const feeCost = feePos.costUsd;
+  feePrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await fee.onTrades([ev({ signature: "FEE-2", side: "sell", tokenDelta: 1000, remainingTokens: 0 })]);
+  const feeSell = fee.ledger.at(-1)!;
+  expect((feeSell.pnlUsd ?? 0) < 0 && approx(feeSell.pnlUsd ?? 0, -(feeCost - feeQty * 0.99 * 0.99), 0.5), "fees: exit books the fee-reduced proceeds as a small loss");
+
+  // Latency: copies wait out the delay, then execute at the (new) mark.
+  const latDir = `${dataDir}-lat`;
+  const latPrices = new Map<string, PairInfo>(prices);
+  const lat = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 10,
+    minWalletTradeUsd: 10,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 0,
+    execDelayMinMs: 60_000,
+    execDelayMaxMs: 60_000,
+    dataDir: latDir,
+    pairProvider: async (mint: string) => latPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await lat.load();
+  latPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await lat.onTrades([ev({ signature: "LAT-1", tokenDelta: 1000 })]);
+  expect(!lat.state.positions[`${WALLET}:${MINT_A}`] && (lat.state.pendingCopies?.length ?? 0) === 1, "latency: copy is queued, not executed immediately");
+  await lat.markAll();
+  expect(!lat.state.positions[`${WALLET}:${MINT_A}`], "latency: not-yet-due copy does not execute on the next mark cycle");
+  lat.state.pendingCopies![0]!.dueAt = Date.now() - 1;
+  latPrices.set(MINT_A, { priceUsd: 2, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await lat.markAll();
+  expect(Boolean(lat.state.positions[`${WALLET}:${MINT_A}`]) && approx(lat.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 200, 1e-9), "latency: due copy executes at the fresh mark (notional re-derived: $2000 -> 10% = $200)");
+
+  // Fill failures: a 100% failure rate never opens a position or spends cash.
+  const failDir = `${dataDir}-fail`;
+  const failPrices = new Map<string, PairInfo>(prices);
+  const fail = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 10,
+    minWalletTradeUsd: 10,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 0,
+    fillFailurePct: 100,
+    dataDir: failDir,
+    pairProvider: async (mint: string) => failPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await fail.load();
+  failPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await fail.onTrades([ev({ signature: "FAIL-1", tokenDelta: 1000 })]);
+  expect(!fail.state.positions[`${WALLET}:${MINT_A}`] && approx(fail.state.cashUsd, 1000, 1e-9), "fill failure: failed buy opens nothing and spends nothing");
+
+  // Liquidity impact: a $1000 clip into a $40k pool adds 2.5% impact on top
+  // of the base slippage.
+  const impDir = `${dataDir}-impact`;
+  const impPrices = new Map<string, PairInfo>(prices);
+  const imp = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 10,
+    minWalletTradeUsd: 10,
+    maxPositions: 100,
+    entrySlippagePct: 0,
+    exitSlippagePct: 0,
+    stopLossPct: 0,
+    liquidityImpactPct: 1,
+    liquidityImpactCapPct: 5,
+    dataDir: impDir,
+    pairProvider: async (mint: string) => impPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await imp.load();
+  impPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 40_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  await imp.onTrades([ev({ signature: "IMP-1", tokenDelta: 10000 })]);
+  const impPos = imp.state.positions[`${WALLET}:${MINT_A}`]!;
+  expect(approx(impPos.costUsd, 1000, 1e-9) && approx(impPos.qty, 1000 / 1.025, 1e-3), "liquidity impact: $1000 into a $40k pool fills at a 2.5% impact price");
+
   console.log("── risk gates ──");
 
   const MINT_C = "TokenCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";

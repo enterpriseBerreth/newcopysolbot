@@ -129,6 +129,14 @@ export const config = {
   // premium/whale/dynamic sizing when non-empty.
   clipTiers: clipTiers("CLIP_TIERS", ""),
 
+  // Market-realism simulation for paper trading.
+  feePct: num("FEE_PCT", 0), // DEX LP fee + priority tips per side, %
+  fillFailurePct: num("FILL_FAILURE_PCT", 0), // % of copied buys that never fill
+  execDelayMinMs: num("EXEC_DELAY_MIN_MS", 0), // detection+execution latency, ms
+  execDelayMaxMs: num("EXEC_DELAY_MAX_MS", 0),
+  liquidityImpactPct: num("LIQ_IMPACT_PCT", 0), // extra slippage per 100% of pool used
+  liquidityImpactCapPct: num("LIQ_IMPACT_CAP_PCT", 5),
+
   // Dynamic clip sizing: scale a wallet's clip up/down based on its last N sells.
   // 0 disables (static 1% / 10%).
   dynamicClipLookbackSells: num("DYNAMIC_CLIP_LOOKBACK_SELLS", 20),

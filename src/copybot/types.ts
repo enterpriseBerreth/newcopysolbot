@@ -64,6 +64,8 @@ export interface PaperState {
   lastResetId?: string;
   /** Token re-entry blacklist: mint -> blocked-until epoch ms (set after a realized-loss exit). */
   tokenBlacklist?: Record<string, number>;
+  /** Copies waiting out the simulated execution latency; executed by markAll. */
+  pendingCopies?: { ev: TradeEvent; dueAt: number }[];
 }
 
 export interface PairInfo {

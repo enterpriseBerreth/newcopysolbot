@@ -43,6 +43,12 @@ Paper copy-trading bot for Solana. Mirrors every buy and sell of a set of tracke
 | `WHALE_FALLBACK_CLIP_PCT` | `0.5` | Fallback clip when `WHALE_CLIP_PCT` cannot fit the budget |
 | `WHALE_MEGA_TRADE_USD` | `100000` | Copied-wallet trades above this copy at `WHALE_MEGA_CLIP_PCT`; 0 disables |
 | `WHALE_MEGA_CLIP_PCT` | `0.1` | Clip % for mega-whale copied trades |
+| `CLIP_TIERS` | (empty) | Entry scale ladder `min:max:pct,...` (max 0 = unbounded); overrides premium/whale/dynamic sizing |
+| `FEE_PCT` | `0` | Simulated per-side swap cost (DEX LP fee + priority tips), % |
+| `FILL_FAILURE_PCT` | `0` | % of copied buys that never fill (congestion/MEV realism) |
+| `EXEC_DELAY_MIN_MS` / `EXEC_DELAY_MAX_MS` | `0` | Simulated detection+execution latency range; copies execute at the post-delay mark |
+| `LIQ_IMPACT_PCT` | `0` | Extra slippage per 100% of pool liquidity consumed (price-impact realism) |
+| `LIQ_IMPACT_CAP_PCT` | `5` | Cap on the liquidity-impact slippage add-on, % |
 | `DYNAMIC_CLIP_LOOKBACK_SELLS` | `20` | Scale clips 0.6x–1.5x by recent performance; 0 disables |
 | `MAX_POSITIONS` | `1000` | Safety valve — concurrency is budget-bound |
 | `ENTRY_SLIPPAGE_PCT` / `EXIT_SLIPPAGE_PCT` | `1` | Fill realism |

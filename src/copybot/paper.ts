@@ -74,6 +74,17 @@ export interface EngineOpts {
    *  (maxUsd 0 = unbounded) copy at clipPct. Overrides premium/whale/dynamic
    *  sizing when set. Empty disables. */
   clipTiers?: { minUsd: number; maxUsd: number; clipPct: number }[];
+  /** Per-side swap cost (DEX LP fee + priority tips), %. 0 disables. */
+  feePct?: number;
+  /** Chance (%) that a copied buy simply fails to fill (congestion/MEV). 0 disables. */
+  fillFailurePct?: number;
+  /** Simulated detection+execution latency range (ms). 0 = execute immediately. */
+  execDelayMinMs?: number;
+  execDelayMaxMs?: number;
+  /** Extra slippage per 100% of pool liquidity consumed: impact% = (ourUsd/liquidity)*100*this. */
+  liquidityImpactPct?: number;
+  /** Cap on the liquidity-impact slippage add-on, %. */
+  liquidityImpactCapPct?: number;
   /** Dynamic clip: if >0, scale this wallet's clip up/down based on the last N closed sells. */
   dynamicClipLookbackSells?: number;
   /** Dynamic clip: boost multiplier cap (default 1.5). */
@@ -94,7 +105,7 @@ export interface EngineOpts {
 }
 
 function defaultState(startingBudgetUsd: number): PaperState {
-  return { cashUsd: startingBudgetUsd, positions: {}, lastSigByWallet: {}, processedSigs: [], tokenBlacklist: {} };
+  return { cashUsd: startingBudgetUsd, positions: {}, lastSigByWallet: {}, processedSigs: [], tokenBlacklist: {}, pendingCopies: [] };
 }
 
 export class PaperEngine {
@@ -130,6 +141,12 @@ export class PaperEngine {
   private whaleMegaTradeUsd: number;
   private whaleMegaClipPct: number;
   private clipTiers: { minUsd: number; maxUsd: number; clipPct: number }[];
+  private feePct: number;
+  private fillFailurePct: number;
+  private execDelayMinMs: number;
+  private execDelayMaxMs: number;
+  private liquidityImpactPct: number;
+  private liquidityImpactCapPct: number;
   private dynamicLookback: number;
   private dynamicMaxMult: number;
   private dynamicMinMult: number;
@@ -158,6 +175,12 @@ export class PaperEngine {
     this.whaleMegaTradeUsd = opts.whaleMegaTradeUsd ?? 0;
     this.whaleMegaClipPct = opts.whaleMegaClipPct ?? 0.1;
     this.clipTiers = opts.clipTiers ?? [];
+    this.feePct = opts.feePct ?? 0;
+    this.fillFailurePct = opts.fillFailurePct ?? 0;
+    this.execDelayMinMs = opts.execDelayMinMs ?? 0;
+    this.execDelayMaxMs = opts.execDelayMaxMs ?? 0;
+    this.liquidityImpactPct = opts.liquidityImpactPct ?? 0;
+    this.liquidityImpactCapPct = opts.liquidityImpactCapPct ?? 5;
     this.dynamicLookback = opts.dynamicClipLookbackSells ?? 0;
     this.dynamicMaxMult = opts.dynamicClipMaxMultiplier ?? 1.5;
     this.dynamicMinMult = opts.dynamicClipMinMultiplier ?? 0.5;
@@ -238,6 +261,7 @@ export class PaperEngine {
         // would re-trigger the reset and archive the live account.
         lastResetId: saved.lastResetId ?? this.state.lastResetId,
         tokenBlacklist: saved.tokenBlacklist ?? {},
+        pendingCopies: saved.pendingCopies ?? [],
       };
       log.info(
         `restored: cash $${this.state.cashUsd.toFixed(2)}, ${Object.keys(this.state.positions).length} position(s), ` +
@@ -301,6 +325,45 @@ export class PaperEngine {
   }
 
   private async handleTrade(ev: TradeEvent): Promise<void> {
+    if (this.execDelayMaxMs > 0) {
+      const min = Math.max(0, this.execDelayMinMs);
+      const dueAt = Date.now() + min + Math.random() * Math.max(0, this.execDelayMaxMs - min);
+      if (!this.state.pendingCopies) this.state.pendingCopies = [];
+      this.state.pendingCopies.push({ ev, dueAt });
+      log.debug(`queued copy ${ev.side} ${ev.mint.slice(0, 8)}… executing in ~${Math.round((dueAt - Date.now()) / 100) / 10}s (simulated latency)`);
+      return;
+    }
+    await this.executeCopy(ev);
+  }
+
+  /** Execute copies whose simulated latency has elapsed. A sell whose matching
+   *  buy is still queued executes that buy first (mirrors a real router). */
+  async processDueCopies(): Promise<void> {
+    const queue = this.state.pendingCopies ?? [];
+    if (!queue.length) return;
+    const now = Date.now();
+    const due = queue.filter((p) => p.dueAt <= now);
+    if (!due.length) return;
+    this.state.pendingCopies = queue.filter((p) => p.dueAt > now);
+    // Sells jump their queued buy to the front so the exit has a position.
+    for (const { ev } of due) {
+      if (ev.side === "sell") {
+        const queuedBuy: { ev: TradeEvent; dueAt: number } | undefined = (this.state.pendingCopies ?? []).find(
+          (p) => p.ev.side === "buy" && p.ev.wallet === ev.wallet && p.ev.mint === ev.mint,
+        );
+        if (queuedBuy && !this.state.positions[`${ev.wallet}:${ev.mint}`]) {
+          this.state.pendingCopies = (this.state.pendingCopies ?? []).filter((p) => p !== queuedBuy);
+          await this.executeCopy(queuedBuy.ev);
+        }
+      }
+    }
+    for (const { ev } of due) {
+      await this.executeCopy(ev);
+      await this.save();
+    }
+  }
+
+  private async executeCopy(ev: TradeEvent): Promise<void> {
     if (ev.side === "buy" && this.shadow.has(ev.wallet)) {
       this.shadowTradesSkipped++;
       log.info(`SHADOW skip buy: ${short(ev.wallet)} ${ev.mint.slice(0, 8)}… qty ${ev.tokenDelta.toPrecision(6)} (shadow wallet, no capital deployed)`);
@@ -318,7 +381,7 @@ export class PaperEngine {
         `(${derived ? "SOL-leg" : "market-estimated"} notional $${walletNotional.toFixed(2)})`,
     );
     if (ev.side === "buy") await this.copyBuy(ev, marketPrice, info?.symbol ?? ev.mint.slice(0, 6), walletNotional, info);
-    else await this.copySell(ev, marketPrice, info?.symbol ?? ev.mint.slice(0, 6), walletNotional);
+    else await this.copySell(ev, marketPrice, info?.symbol ?? ev.mint.slice(0, 6), walletNotional, info);
   }
 
   /** Resolve the copied wallet's notional from its SOL leg when credible.
@@ -439,8 +502,19 @@ export class PaperEngine {
     }
     const ourUsd = (walletNotional * appliedPct) / 100;
 
-    const fillPrice = price * (1 + this.opts.entrySlippagePct / 100);
-    const qty = ourUsd / fillPrice;
+    // Realism: some buys simply never fill (congestion, MEV front-running).
+    if (this.fillFailurePct > 0 && Math.random() * 100 < this.fillFailurePct) {
+      log.warn(`FILL FAILED (simulated): ${short(ev.wallet)} ${symbol} $${ourUsd.toFixed(2)} copy — no position opened`);
+      return;
+    }
+    // Realism: bigger orders vs pool liquidity move the price against us.
+    const impactPct =
+      this.liquidityImpactPct > 0 && info?.liquidityUsd
+        ? Math.min(this.liquidityImpactCapPct, (ourUsd / info.liquidityUsd) * 100 * this.liquidityImpactPct)
+        : 0;
+    const fillPrice = price * (1 + (this.opts.entrySlippagePct + impactPct) / 100);
+    // Realism: DEX LP fee + priority tips come out of the received tokens.
+    const qty = (ourUsd * (1 - this.feePct / 100)) / fillPrice;
     this.state.cashUsd -= ourUsd;
 
     let pos: Position;
@@ -491,6 +565,7 @@ export class PaperEngine {
     price: number,
     symbol: string,
     walletNotional: number,
+    info?: PairInfo | null,
   ): Promise<void> {
     const key = `${ev.wallet}:${ev.mint}`;
     const pos = this.state.positions[key];
@@ -508,9 +583,14 @@ export class PaperEngine {
     // position exits later at a sane mark (copy exits, stop-loss, manual close).
     if (this.suspectExitPrice(pos, price)) return;
 
-    const fillPrice = price * (1 - this.opts.exitSlippagePct / 100);
     const sellQty = pos.qty * frac;
-    const proceeds = sellQty * fillPrice;
+    const impactPct =
+      this.liquidityImpactPct > 0 && info
+        ? Math.min(this.liquidityImpactCapPct, ((sellQty * price) / info.liquidityUsd) * 100 * this.liquidityImpactPct)
+        : 0;
+    const fillPrice = price * (1 - (this.opts.exitSlippagePct + impactPct) / 100);
+    // Realism: DEX LP fee + priority tips come out of the sale proceeds.
+    const proceeds = sellQty * fillPrice * (1 - this.feePct / 100);
     const costSold = pos.costUsd * frac;
     const pnlUsd = proceeds - costSold;
     const pnlPct = costSold > 0 ? (pnlUsd / costSold) * 100 : 0;
@@ -723,6 +803,7 @@ export class PaperEngine {
 
   /** Re-mark every open position; force-close anything past the stop loss. */
   async markAll(): Promise<void> {
+    await this.processDueCopies();
     const next = this.processing.then(() => this.markPositions());
     this.processing = next.catch((err) => log.error(`marking failed: ${String(err)}`));
     return next;
@@ -773,7 +854,7 @@ export class PaperEngine {
       log.warn(`stop-loss on ${pos.symbol}: no mark price; retry next cycle`);
       return;
     }
-    const proceeds = pos.qty * fillPrice;
+    const proceeds = pos.qty * fillPrice * (1 - this.feePct / 100);
     const pnlUsd = proceeds - pos.costUsd;
     const pnlPct = pos.costUsd > 0 ? (pnlUsd / pos.costUsd) * 100 : 0;
     if (pnlUsd < 0) this.blockMint(pos.mint, pos.symbol);
