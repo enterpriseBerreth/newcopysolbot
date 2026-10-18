@@ -75,4 +75,10 @@ export const DEFAULT_WALLETS = [
   "7NnaXghjuU92gM9kmwXysqa5HboyZuR2LTaBnvazFxSH",
   "4Bc4Ue2G37zoQCiksAvwMgXQQJFKcYQThnoHPKizAmWB",
   "BtDaZUqHr2mKH5EYQCztuerHBuBEfQNYdquTDtEZp2Ym",
+  "6DQAGJT7VZPVBsuG4kn3AvpyHCEi7B2RFFvMZdbqQqqP",
+  "DAEdBmTPEKM6xkwfzC3d411QUe6coKpkND6UURa4CvHC",
+  "649ot18fccD6Mc9V4aHWTdoSVCuqAEtg9aWuxBA9cRoU",
+  "2uNRrZ2SAMHtW9UFL8Dtf2pMnt1T3pwnDEsiGN6KzAaZ",
+  "GTuctg8YR5oH1jdAaGMvkb51MSWPHE9nLCc1zUrwss6L",
+  "tAg2tgyHmkGTsmq8wBSKsGvUUgoH37cxmCfRUZSXdtB",
 ].join(",");

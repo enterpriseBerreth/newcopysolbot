@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     "8ZN71XTdVo8yRovnGLmNgW3Tgniw6A4J3JGLvPD686FP",
   ];
   const roster = DEFAULT_WALLETS.split(",");
-  expect(roster.length === 31 && new Set(roster).size === 31, "wallet roster contains 31 unique addresses");
+  expect(roster.length === 37 && new Set(roster).size === 37, "wallet roster contains 37 unique addresses");
   const latestAdds = [
     "AusMtCwzrPnPoJUSHYUH9iogVwpWh2ESHC6xWU75tBDo",
     "6vbrTLsWy76TxDQAUKLqZrPohQuq6EVaJgfGzR82paFa",
@@ -105,6 +105,12 @@ async function main(): Promise<void> {
     "7NnaXghjuU92gM9kmwXysqa5HboyZuR2LTaBnvazFxSH",
     "4Bc4Ue2G37zoQCiksAvwMgXQQJFKcYQThnoHPKizAmWB",
     "BtDaZUqHr2mKH5EYQCztuerHBuBEfQNYdquTDtEZp2Ym",
+    "6DQAGJT7VZPVBsuG4kn3AvpyHCEi7B2RFFvMZdbqQqqP",
+    "DAEdBmTPEKM6xkwfzC3d411QUe6coKpkND6UURa4CvHC",
+    "649ot18fccD6Mc9V4aHWTdoSVCuqAEtg9aWuxBA9cRoU",
+    "2uNRrZ2SAMHtW9UFL8Dtf2pMnt1T3pwnDEsiGN6KzAaZ",
+    "GTuctg8YR5oH1jdAaGMvkb51MSWPHE9nLCc1zUrwss6L",
+    "tAg2tgyHmkGTsmq8wBSKsGvUUgoH37cxmCfRUZSXdtB",
   ];
   expect(latestAdds.every((wallet) => roster.includes(wallet) && !config.premiumWallets.includes(wallet)), "newly added wallets are tracked at the standard 1% clip (not premium)");
   expect(newWallets.every((wallet) => roster.includes(wallet) && config.shadowWallets.includes(wallet) && !config.premiumWallets.includes(wallet)), "all seven added wallets remain tracked in shadow mode at standard 1% clip configuration");
