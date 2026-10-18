@@ -70,6 +70,10 @@ export interface EngineOpts {
   whaleMegaTradeUsd?: number;
   /** Clip % for mega-whale copied trades. */
   whaleMegaClipPct?: number;
+  /** Entry scale tiers: copied trades whose notional falls in [minUsd, maxUsd)
+   *  (maxUsd 0 = unbounded) copy at clipPct. Overrides premium/whale/dynamic
+   *  sizing when set. Empty disables. */
+  clipTiers?: { minUsd: number; maxUsd: number; clipPct: number }[];
   /** Dynamic clip: if >0, scale this wallet's clip up/down based on the last N closed sells. */
   dynamicClipLookbackSells?: number;
   /** Dynamic clip: boost multiplier cap (default 1.5). */
@@ -125,6 +129,7 @@ export class PaperEngine {
   private whaleFallbackClipPct: number;
   private whaleMegaTradeUsd: number;
   private whaleMegaClipPct: number;
+  private clipTiers: { minUsd: number; maxUsd: number; clipPct: number }[];
   private dynamicLookback: number;
   private dynamicMaxMult: number;
   private dynamicMinMult: number;
@@ -152,6 +157,7 @@ export class PaperEngine {
     this.whaleFallbackClipPct = opts.whaleFallbackClipPct ?? 0.5;
     this.whaleMegaTradeUsd = opts.whaleMegaTradeUsd ?? 0;
     this.whaleMegaClipPct = opts.whaleMegaClipPct ?? 0.1;
+    this.clipTiers = opts.clipTiers ?? [];
     this.dynamicLookback = opts.dynamicClipLookbackSells ?? 0;
     this.dynamicMaxMult = opts.dynamicClipMaxMultiplier ?? 1.5;
     this.dynamicMinMult = opts.dynamicClipMinMultiplier ?? 0.5;
@@ -404,16 +410,19 @@ export class PaperEngine {
     const tokenCost = positions.filter((pos) => pos.mint === ev.mint).reduce((sum, pos) => sum + pos.costUsd, 0);
     const exposureLimit = this.maxExposurePct > 0 ? (this.capital() * this.maxExposurePct) / 100 : Infinity;
     const dynamicMult = this.dynamicClipMultiplier(ev.wallet);
-    const megaWhale = this.whaleMegaTradeUsd > 0 && walletNotional > this.whaleMegaTradeUsd;
-    const whale = !megaWhale && this.whaleTradeUsd > 0 && walletNotional > this.whaleTradeUsd;
-    const rawChoices = megaWhale
-      ? [this.whaleMegaClipPct]
-      : whale
-        ? [this.whaleClipPct, this.whaleFallbackClipPct]
-        : premium
-          ? [primaryPct, fallbackPct]
-          : [primaryPct];
-    const choices = rawChoices.map((pct) => (whale || megaWhale ? pct : Math.max(0.1, pct * dynamicMult)));
+    const tierClip = this.tierClipFor(walletNotional);
+    const megaWhale = !tierClip && this.whaleMegaTradeUsd > 0 && walletNotional > this.whaleMegaTradeUsd;
+    const whale = !tierClip && !megaWhale && this.whaleTradeUsd > 0 && walletNotional > this.whaleTradeUsd;
+    const rawChoices = tierClip
+      ? [tierClip]
+      : megaWhale
+        ? [this.whaleMegaClipPct]
+        : whale
+          ? [this.whaleClipPct, this.whaleFallbackClipPct]
+          : premium
+            ? [primaryPct, fallbackPct]
+            : [primaryPct];
+    const choices = rawChoices.map((pct) => (tierClip || whale || megaWhale ? pct : Math.max(0.1, pct * dynamicMult)));
     const appliedPct = choices.find((pct) => {
       const amount = (walletNotional * pct) / 100;
       return amount > 0 && this.state.cashUsd >= amount &&
@@ -471,7 +480,7 @@ export class PaperEngine {
     };
     await this.appendLedger(trade);
     log.info(
-      `BUY ${symbol}: ${short(ev.wallet)} spent ~$${walletNotional.toFixed(0)} -> we clip ${appliedPct}%${megaWhale ? " (mega-whale rule)" : whale ? " (whale rule)" : ""} ($${ourUsd.toFixed(2)}) ` +
+      `BUY ${symbol}: ${short(ev.wallet)} spent ~$${walletNotional.toFixed(0)} -> we clip ${appliedPct}%${tierClip ? " (entry scale)" : megaWhale ? " (mega-whale rule)" : whale ? " (whale rule)" : ""} ($${ourUsd.toFixed(2)}) ` +
         `@ $${fillPrice.toPrecision(6)} (qty ${qty.toPrecision(6)}), cash $${this.state.cashUsd.toFixed(2)}`,
     );
     // No Telegram alert for entries: only CLOSED trades alert.
@@ -626,6 +635,16 @@ export class PaperEngine {
       if (s.won) wins++;
     }
     return { realizedPnl, sells, wins };
+  }
+
+  /** Entry scale: the clip for a copied trade whose notional falls in a tier. */
+  private tierClipFor(walletNotional: number): number | null {
+    for (const tier of this.clipTiers) {
+      if (walletNotional >= tier.minUsd && (tier.maxUsd <= 0 || walletNotional < tier.maxUsd)) {
+        return tier.clipPct;
+      }
+    }
+    return null;
   }
 
   /** Scale a wallet's clip based on its recent realized performance.

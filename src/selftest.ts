@@ -843,6 +843,43 @@ async function main(): Promise<void> {
   await whl.onTrades([ev({ signature: "WHL-4", tokenDelta: 3000 })]);
   expect(approx(whl.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 25, 0.5), "whale trade falls back to 0.5% clip when 1% cannot fit");
 
+  // Entry scale tiers: clip set by the copied wallet's trade size, overriding
+  // premium/whale/dynamic sizing.
+  const esDir = `${dataDir}-escale`;
+  const esPrices = new Map<string, PairInfo>(prices);
+  const es = new PaperEngine({
+    startingBudgetUsd: 1000,
+    clipPct: 1,
+    minWalletTradeUsd: 10,
+    maxPositions: 100,
+    entrySlippagePct: 1,
+    exitSlippagePct: 1,
+    stopLossPct: 0,
+    topUpCostCapMultiple: 0,
+    clipTiers: [
+      { minUsd: 10, maxUsd: 100, clipPct: 5 },
+      { minUsd: 100, maxUsd: 1000, clipPct: 10 },
+      { minUsd: 1000, maxUsd: 10000, clipPct: 1 },
+      { minUsd: 10000, maxUsd: 0, clipPct: 0.1 },
+    ],
+    dataDir: esDir,
+    pairProvider: async (mint: string) => esPrices.get(mint) ?? null,
+    solPriceProvider: async () => 10,
+  });
+  await es.load();
+  esPrices.set(MINT_A, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "AAAA", dexId: "raydium", pairUrl: "" });
+  esPrices.set(MINT_B, { priceUsd: 1, liquidityUsd: 1_000_000, symbol: "BBBB", dexId: "raydium", pairUrl: "" });
+  await es.onTrades([ev({ signature: "ES-1", tokenDelta: 50 })]);
+  expect(approx(es.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 2.5, 1e-9), "entry scale: $50 wallet trade copies at 5%");
+  await es.onTrades([ev({ signature: "ES-2", wallet: SPAM_WALLET, mint: MINT_B, tokenDelta: 500 })]);
+  expect(approx(es.state.positions[`${SPAM_WALLET}:${MINT_B}`]!.costUsd, 50, 1e-9), "entry scale: $500 wallet trade copies at 10%");
+  await es.onTrades([ev({ signature: "ES-3", tokenDelta: 5000 })]);
+  expect(approx(es.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 52.5, 1e-9), "entry scale: $5000 wallet trade copies at 1%");
+  await es.onTrades([ev({ signature: "ES-4", wallet: SPAM_WALLET, mint: MINT_B, tokenDelta: 50000 })]);
+  expect(approx(es.state.positions[`${SPAM_WALLET}:${MINT_B}`]!.costUsd, 100, 1e-9), "entry scale: $50k wallet trade copies at 0.1%");
+  await es.onTrades([ev({ signature: "ES-5", tokenDelta: 500000 })]);
+  expect(approx(es.state.positions[`${WALLET}:${MINT_A}`]!.costUsd, 552.5, 1e-9), "entry scale: $500k wallet trade stays at 0.1% (unbounded top tier)");
+
   console.log("── risk gates ──");
 
   const MINT_C = "TokenCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";

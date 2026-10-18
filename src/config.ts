@@ -16,6 +16,23 @@ function bool(key: string, def: boolean): boolean {
   return v !== "false" && v !== "0" && v !== "off";
 }
 
+// Entry scale tiers: "min:max:pct,..." with max 0 = unbounded. Empty = disabled.
+function clipTiers(key: string, def: string): { minUsd: number; maxUsd: number; clipPct: number }[] {
+  const raw = str(key, def);
+  if (!raw) return [];
+  const tiers: { minUsd: number; maxUsd: number; clipPct: number }[] = [];
+  for (const part of raw.split(",")) {
+    const nums = part.trim().split(":").map(Number);
+    if (nums.length !== 3) continue;
+    const [minUsd, maxUsd, clipPct] = nums as [number, number, number];
+    const boundsOk = Number.isFinite(minUsd) && minUsd >= 0 && Number.isFinite(maxUsd) && (maxUsd === 0 || maxUsd > minUsd);
+    if (boundsOk && Number.isFinite(clipPct) && clipPct > 0) {
+      tiers.push({ minUsd, maxUsd, clipPct });
+    }
+  }
+  return tiers;
+}
+
 export const config = {
   rpcUrl: str("SOLANA_RPC_URL", "https://solana-rpc.publicnode.com"),
   // WebSocket endpoint for push-based capture (e.g. Helius wss://...?api-key=...).
@@ -108,6 +125,9 @@ export const config = {
   whaleFallbackClipPct: num("WHALE_FALLBACK_CLIP_PCT", 0.5),
   whaleMegaTradeUsd: num("WHALE_MEGA_TRADE_USD", 100_000),
   whaleMegaClipPct: num("WHALE_MEGA_CLIP_PCT", 0.1),
+  // Entry scale ladder: clip set by the copied wallet's trade size. Overrides
+  // premium/whale/dynamic sizing when non-empty.
+  clipTiers: clipTiers("CLIP_TIERS", ""),
 
   // Dynamic clip sizing: scale a wallet's clip up/down based on its last N sells.
   // 0 disables (static 1% / 10%).
