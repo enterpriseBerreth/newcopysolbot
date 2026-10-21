@@ -21,6 +21,7 @@ const MAX_SPAM_NOTIFICATIONS_PER_WINDOW = 5;
 export interface WsLike {
   send(data: string): void;
   close(): void;
+  ping?(): void;
   onopen: (() => void) | null;
   onclose: (() => void) | null;
   onerror: ((err: unknown) => void) | null;
@@ -123,6 +124,18 @@ export class WsTradeWatcher {
     const ws = this.wsFactory(this.url);
     this.ws = ws;
 
+    // RPC gateways close connections idle for ~60s; protocol-level pings keep
+    // the socket alive between sparse logsNotifications. unref() so a live
+    // heartbeat never blocks process exit (matters for selftests).
+    const heartbeat: ReturnType<typeof setInterval> & { unref?: () => void } = setInterval(() => {
+      try {
+        ws.ping?.();
+      } catch {
+        /* socket already dead: onclose handles the reconnect */
+      }
+    }, 45_000);
+    heartbeat.unref?.();
+
     ws.onopen = () => {
       log.info(`connected; subscribing ${this.wallets.length} wallet(s) via logsSubscribe`);
       // One subscription per wallet: Solana RPCs (incl. Helius) accept only a
@@ -199,6 +212,7 @@ export class WsTradeWatcher {
     };
 
     ws.onclose = () => {
+      clearInterval(heartbeat);
       if (this.ws !== ws || this.stopped) return;
       this.subscriptions.clear();
       log.warn(`ws closed; reconnecting in ${this.backoffMs}ms`);
